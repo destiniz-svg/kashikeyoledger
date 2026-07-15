@@ -48,6 +48,16 @@ const DEMO_FILINGS: GstFilingRow[] = [
   { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
 ];
 
+/** Demo TGST (MIRA 206) calendar — one tourism sale drives July's output tax. */
+const DEMO_TGST_FILINGS: GstFilingRow[] = [
+  { id: "t-3", form: "MIRA_206_TGST", periodStart: "2026-03-01", periodEnd: "2026-03-31", dueDate: "2026-04-28", status: "FILED", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "t-4", form: "MIRA_206_TGST", periodStart: "2026-04-01", periodEnd: "2026-04-30", dueDate: "2026-05-28", status: "FILED", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "t-5", form: "MIRA_206_TGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "t-6", form: "MIRA_206_TGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "t-7", form: "MIRA_206_TGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", ...F0, sales8: 3480, outputTax: 480, inputTax: 0, netPayable: 480 },
+  { id: "t-8", form: "MIRA_206_TGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+];
+
 /** Demo purchase bills mirroring the seeded Supabase org (aging computed live). */
 const DEMO_BILLS: (Omit<BillRow, "aging"> & { dueIso: string })[] = [
   { id: "bill-1", vendor: "Altura Pvt Ltd", tin: "1145053", invoice: "ALT/INV-000024", po: "PO-RDC-2026-003845", date: "05 Jul 2026", due: "20 Jul 2026", dueIso: "2026-07-20", cur: "MVR", subtotal: 91000, gst: 7280, total: 98280, cat: "Equipment", taxCat: "GGST", status: "AI_VERIFIED", rate: 8, line: "Concrete Mixer (50KG - 1 Bag)", qty: 1, unit: 91000 },
@@ -238,6 +248,10 @@ export class MemoryStore implements LedgerStore {
 
   async listGstFilings(): Promise<GstFilingRow[]> {
     return DEMO_FILINGS.map((f) => ({ ...f }));
+  }
+
+  async listTgstFilings(): Promise<GstFilingRow[]> {
+    return DEMO_TGST_FILINGS.map((f) => ({ ...f }));
   }
 
   async taxpayer(): Promise<{ name: string; tin: string }> {

@@ -65,7 +65,7 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `POST /banking/:txnId/confirm` 🔒 | Confirm a bank line → `MATCHED` (optional `{ vendorId }` attaches a vendor) |
 | `POST /banking/:txnId/exclude` 🔒 | Exclude a bank line from reconciliation → `EXCLUDED` |
 | `POST /banking/:txnId/unmatch` 🔒 | Reset a bank line → `UNMATCHED` (clears the matched vendor) |
-| `GET /tax-filing`    | MIRA 205 (GGST) filing calendar with output/input/net tax per period |
+| `GET /tax-filing`    | MIRA 205 (GGST) & 206 (TGST) filing calendars with output/input/net tax per period |
 | `GET /reports`       | Financial KPIs, AP aging, and spend-by-category                |
 | `GET /settings`      | Organization profile, tax registration, and team members       |
 | `GET /sales`         | List POS sales with their line items                          |

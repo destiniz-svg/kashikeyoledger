@@ -473,3 +473,55 @@ end;
 $$;
 
 grant execute on function public.import_bank_statement(uuid, uuid, text, jsonb) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Generalized tax filings (migration kashikeyo_ledger_org_tax_filings_fn)
+-- ---------------------------------------------------------------------------
+
+-- Parameterized filing-boxes function for any GST-style return, by form and
+-- standard-rate tax category: MIRA 205 = ('MIRA_205_GGST','GGST'), MIRA 206 =
+-- ('MIRA_206_TGST','TGST'). Supersedes org_gst_filings (kept for compatibility).
+create or replace function public.org_tax_filings(p_org uuid, p_form text, p_tax_cat text)
+returns table(
+  id uuid, form text, period_start date, period_end date, due_date date, status text,
+  sales_8 numeric, sales_zero numeric, sales_exempt numeric, sales_oos numeric,
+  output_tax numeric, input_tax numeric, net_payable numeric
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select fp.id, fp.form::text, fp.period_start, fp.period_end, fp.due_date, fp.status::text,
+         coalesce(s.sales_std, 0)    as sales_8,
+         coalesce(s.sales_zero, 0)   as sales_zero,
+         coalesce(s.sales_exempt, 0) as sales_exempt,
+         coalesce(s.sales_oos, 0)    as sales_oos,
+         coalesce(s.output_tax, 0)   as output_tax,
+         coalesce(i.tax, 0)          as input_tax,
+         coalesce(s.output_tax, 0) - coalesce(i.tax, 0) as net_payable
+  from filing_periods fp
+  left join lateral (
+    select
+      sum(case when li.tax_category::text = p_tax_cat then li.line_subtotal + li.tax_amount else 0 end) as sales_std,
+      sum(case when li.tax_category = 'ZERO_RATED' then li.line_subtotal else 0 end) as sales_zero,
+      sum(case when li.tax_category = 'EXEMPT' then li.line_subtotal else 0 end) as sales_exempt,
+      sum(case when li.tax_category = 'OUT_OF_SCOPE' then li.line_subtotal else 0 end) as sales_oos,
+      sum(case when li.tax_category::text = p_tax_cat then li.tax_amount else 0 end) as output_tax
+    from transactions t
+    join transaction_line_items li on li.transaction_id = t.id
+    where t.organization_id = p_org and t.type = 'POS_SALE'
+      and t.transaction_date between fp.period_start and fp.period_end
+  ) s on true
+  left join lateral (
+    select sum(li.tax_amount) as tax
+    from transactions t
+    join transaction_line_items li on li.transaction_id = t.id
+    where t.organization_id = p_org and t.type in ('PURCHASE_BILL', 'EXPENSE')
+      and li.tax_category::text = p_tax_cat and li.input_tax_claimable
+      and t.transaction_date between fp.period_start and fp.period_end
+  ) i on true
+  where fp.organization_id = p_org and fp.form::text = p_form
+  order by fp.period_start;
+$$;
+
+grant execute on function public.org_tax_filings(uuid, text, text) to anon, authenticated, service_role;

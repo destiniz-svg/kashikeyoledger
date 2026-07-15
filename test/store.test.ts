@@ -228,6 +228,18 @@ test("listGstFilings returns a GGST calendar with net = output - input", async (
   assert.ok(due, "expected a DUE_SOON period");
 });
 
+test("listTgstFilings returns a TGST (MIRA 206) calendar with net = output - input", async () => {
+  const filings = await new MemoryStore().listTgstFilings();
+  assert.ok(filings.length >= 1);
+  for (const f of filings) {
+    assert.equal(f.form, "MIRA_206_TGST");
+    assert.equal(Math.round((f.outputTax - f.inputTax) * 100) / 100, f.netPayable);
+  }
+  const jul = filings.find((f) => f.periodStart === "2026-07-01");
+  assert.equal(jul?.outputTax, 480); // one tourism sale drives output tax
+  assert.equal(jul?.netPayable, 480);
+});
+
 test("listVendors rolls up spend and bill count per vendor, sorted by spend", async () => {
   const vendors = await new MemoryStore().listVendors();
   assert.equal(vendors.length, 6);

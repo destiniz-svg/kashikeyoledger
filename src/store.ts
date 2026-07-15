@@ -117,7 +117,13 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
-/** A GGST (MIRA 205) filing period with the return boxes computed. */
+/** The GST-style returns Kashikeyo prepares: MIRA 205 (GGST) and 206 (TGST). */
+export const TAX_FORMS = [
+  { form: "MIRA_205_GGST", taxCategory: "GGST", tax: "GGST", mira: "MIRA 205", rate: 8 },
+  { form: "MIRA_206_TGST", taxCategory: "TGST", tax: "TGST", mira: "MIRA 206", rate: 17 },
+] as const;
+
+/** A GST-style (MIRA 205/206) filing period with the return boxes computed. */
 export interface GstFilingRow {
   id: string;
   form: string;
@@ -399,7 +405,10 @@ export interface LedgerStore {
     source: string,
     lines: ImportLineInput[],
   ): Promise<ImportResult>;
+  /** MIRA 205 (GGST) filing calendar with computed return boxes. */
   listGstFilings(): Promise<GstFilingRow[]>;
+  /** MIRA 206 (TGST) filing calendar with computed return boxes. */
+  listTgstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;
 

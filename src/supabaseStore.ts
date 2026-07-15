@@ -552,9 +552,17 @@ export class SupabaseStore implements LedgerStore {
   }
 
   async listGstFilings(): Promise<GstFilingRow[]> {
-    const rows = (await this.#request("/rest/v1/rpc/org_gst_filings", {
+    return this.#taxFilings("MIRA_205_GGST", "GGST");
+  }
+
+  async listTgstFilings(): Promise<GstFilingRow[]> {
+    return this.#taxFilings("MIRA_206_TGST", "TGST");
+  }
+
+  async #taxFilings(form: string, taxCat: string): Promise<GstFilingRow[]> {
+    const rows = (await this.#request("/rest/v1/rpc/org_tax_filings", {
       method: "POST",
-      body: JSON.stringify({ p_org: this.org }),
+      body: JSON.stringify({ p_org: this.org, p_form: form, p_tax_cat: taxCat }),
     })) as {
       id: string;
       form: string;
