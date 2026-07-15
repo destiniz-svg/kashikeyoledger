@@ -6,11 +6,13 @@
  * Listens on `process.env.PORT` (Railway sets this), defaulting to 3000.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { authorizeWrite } from "./auth.ts";
 import { createStore } from "./createStore.ts";
 import { StoreError, type EntryInput } from "./store.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
+const API_KEY = process.env.KASHIKEYO_API_KEY;
 const store = createStore();
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -41,6 +43,13 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
 
   try {
+    // Writes require a valid API key; reads are open.
+    const isWrite = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+    if (isWrite) {
+      const auth = authorizeWrite(req.headers, API_KEY);
+      if (!auth.ok) return send(res, auth.status, { error: auth.message });
+    }
+
     if (method === "GET" && path === "/health") {
       return send(res, 200, { status: "ok", backend: store.backend });
     }
@@ -51,12 +60,13 @@ const server = createServer(async (req, res) => {
         status: "ok",
         backend: store.backend,
         organization: store.org || null,
+        writeAuth: API_KEY ? "required (X-API-Key or Bearer)" : "not configured",
         endpoints: [
           "GET /health",
           "GET /accounts",
-          "POST /accounts { code, name, accountType }",
+          "POST /accounts { code, name, accountType }  [auth]",
           "GET /entries",
-          "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }",
+          "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [auth]",
           "GET /trial-balance",
         ],
         outOfBalanceBy: await store.outOfBalanceBy(),

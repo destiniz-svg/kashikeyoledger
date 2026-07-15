@@ -20,6 +20,10 @@ Two layers:
 Writes to Supabase go through the `post_journal_entry` SQL function (see
 `supabase/functions.sql`) so the insert is atomic and balance-checked in the DB.
 
+Write requests (any POST/PUT/PATCH/DELETE) require an API key via `src/auth.ts`
+(`KASHIKEYO_API_KEY`); reads are open. Auth is **fail-closed** — with no key
+configured, writes are rejected (503).
+
 ## Commands
 
 ```bash
