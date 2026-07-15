@@ -32,6 +32,52 @@ function ScreenFallback() {
   );
 }
 
+function ScreenError({ onRetry }) {
+  return (
+    <div style={{ padding: "72px 24px", textAlign: "center" }}>
+      <div style={{ fontSize: 15, fontWeight: 650, color: T.text }}>This screen hit a snag</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginTop: 6 }}>
+        It may be a temporary glitch, or a newer version of the app is available.</div>
+      <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 18 }}>
+        <button onClick={onRetry} style={{ border: `1px solid ${T.line}`, borderRadius: 9,
+          padding: "8px 16px", fontSize: 12.5, fontWeight: 600, color: T.text, background: T.surface,
+          cursor: "pointer" }}>Try again</button>
+        <button onClick={() => window.location.reload()} style={{ background: T.ink, color: "#fff",
+          borderRadius: 9, padding: "8px 16px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+          Reload app</button>
+      </div>
+    </div>
+  );
+}
+
+// Contains a screen error so it never blanks the whole app (nav/shell survive),
+// and transparently recovers a stale lazy chunk after a redeploy by reloading
+// once. Resets when the user navigates to a different screen.
+class ScreenBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error) {
+    const msg = String((error && error.message) || error || "");
+    const chunkFail = /dynamically imported module|loading chunk|importing a module script failed|failed to fetch/i.test(msg);
+    if (chunkFail && !sessionStorage.getItem("k-chunk-reload")) {
+      sessionStorage.setItem("k-chunk-reload", "1"); // guard against a reload loop
+      window.location.reload();
+    }
+  }
+  componentDidUpdate(prev) {
+    if (prev.screen !== this.props.screen && this.state.error) this.setState({ error: null });
+  }
+  render() {
+    if (this.state.error) return <ScreenError onRetry={() => this.setState({ error: null })} />;
+    return this.props.children;
+  }
+}
+
 const TITLES = {
   dashboard: "Spend Overview", approval: "Approval queue", bills: "Bills & expenses",
   inventory: "Inventory", banking: "Banking", filing: "Tax filing", vendors: "Vendors",
@@ -75,6 +121,7 @@ export default function App() {
         <MobileHeader title={title} />
         <Topbar title={title} auth={auth} />
         <div className="flex-1" style={{ paddingBottom: 64 }} key={session ? "auth" : "anon"}>
+          <ScreenBoundary screen={active}>
           <Suspense fallback={<ScreenFallback />}>
             {active === "dashboard" && <Dashboard onNav={setActive} />}
             {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
@@ -88,6 +135,7 @@ export default function App() {
             {active === "txns" && <Transactions />}
             {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "settings", "txns"].includes(active) && <Placeholder id={active} />}
           </Suspense>
+          </ScreenBoundary>
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} counts={counts} />
