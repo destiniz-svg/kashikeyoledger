@@ -142,6 +142,7 @@ const server = createServer(async (req, res) => {
           "GET /bills  [read]",
           "GET /vendors  [read]",
           "GET /inventory  [read]",
+          "GET /banking  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
           "POST /bills/:id/approve  [write]",
@@ -303,6 +304,31 @@ const server = createServer(async (req, res) => {
         totalValue: Math.round(items.reduce((s, i) => s + i.stockValue, 0) * 100) / 100,
         lowCount: items.filter((i) => i.status === "low").length,
         outCount: items.filter((i) => i.status === "out").length,
+      });
+    }
+
+    if (method === "GET" && path === "/banking") {
+      if (!(await readGuard(req, res))) return;
+      const accounts = await store.listBankAccounts();
+      const transactions = await store.listBankTransactions();
+      const byStatus: Record<string, number> = { UNMATCHED: 0, SUGGESTED: 0, MATCHED: 0, EXCLUDED: 0 };
+      for (const t of transactions) byStatus[t.reconStatus] = (byStatus[t.reconStatus] ?? 0) + 1;
+      return send(res, 200, {
+        currency: "MVR",
+        accounts,
+        transactions,
+        // Combined balance of MVR accounts only (other currencies shown per card).
+        mvrBalance: round2(
+          accounts.filter((a) => a.currency === "MVR").reduce((s, a) => s + a.balance, 0),
+        ),
+        summary: {
+          total: transactions.length,
+          unmatched: byStatus.UNMATCHED,
+          suggested: byStatus.SUGGESTED,
+          matched: byStatus.MATCHED,
+          excluded: byStatus.EXCLUDED,
+          unreconciled: byStatus.UNMATCHED + byStatus.SUGGESTED,
+        },
       });
     }
 

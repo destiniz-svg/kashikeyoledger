@@ -6,11 +6,15 @@
 import {
   StoreError,
   agingBucket,
+  bankTxnSigned,
   computeSale,
+  formatBillDate,
   toMinor,
   validateEntry,
   vendorInitials,
   type AccountRow,
+  type BankAccountRow,
+  type BankTxnRow,
   type BillRow,
   type EntryInput,
   type EntryRow,
@@ -45,6 +49,31 @@ const DEMO_BILLS: (Omit<BillRow, "aging"> & { dueIso: string })[] = [
   { id: "bill-5", vendor: "Beaver Builders Private Limited", tin: "—", invoice: "BB-3382", po: "—", date: "14 Jun 2026", due: "29 Jun 2026", dueIso: "2026-06-29", cur: "MVR", subtotal: 4233.72, gst: 338.7, total: 4572.42, cat: "Construction", taxCat: "GGST", status: "DRAFT", rate: 8, line: "Site labour & materials", qty: 1, unit: 4233.72 },
   { id: "bill-6", vendor: "Island Choice LLP", tin: "—", invoice: "IC-7781", po: "—", date: "12 May 2026", due: "27 May 2026", dueIso: "2026-05-27", cur: "MVR", subtotal: 215, gst: 17.2, total: 232.2, cat: "F&B", taxCat: "GGST", status: "ACCOUNTANT_APPROVED", rate: 8, line: "Cafe supplies", qty: 1, unit: 215 },
 ];
+
+/** Demo bank accounts + statement lines, mirroring the seeded Supabase org. */
+const DEMO_BANK_ACCOUNTS = [
+  { id: "ba-mvr", name: "Business Current", bankName: "Bank of Maldives", accountMasked: "•••• 4021", currency: "MVR", linked: true },
+  { id: "ba-usd", name: "USD Settlement", bankName: "Bank of Maldives", accountMasked: "•••• 8837", currency: "USD", linked: false },
+] as const;
+
+const DEMO_BANK_TXNS: (Omit<BankTxnRow, "date" | "amount" | "accountName"> & { amt: number })[] = [
+  { id: "bt-1", accountId: "ba-mvr", isoDate: "2026-07-12", type: "TRANSFER", reference: "FT26071240", counterparty: "Card Settlement", narrative: "POS card settlement — BML Merchant", direction: "CREDIT", amt: 27300.0, currency: "MVR", reconStatus: "SUGGESTED", matchedVendor: null },
+  { id: "bt-2", accountId: "ba-mvr", isoDate: "2026-07-10", type: "TRANSFER", reference: "FT26071005", counterparty: "Payroll", narrative: "Staff salary — July", direction: "DEBIT", amt: 12000.0, currency: "MVR", reconStatus: "EXCLUDED", matchedVendor: null },
+  { id: "bt-3", accountId: "ba-mvr", isoDate: "2026-07-06", type: "TRANSFER", reference: "FT26070619", counterparty: "Island Choice LLP", narrative: "Payment IC-7781", direction: "DEBIT", amt: 232.2, currency: "MVR", reconStatus: "MATCHED", matchedVendor: "Island Choice LLP" },
+  { id: "bt-4", accountId: "ba-mvr", isoDate: "2026-07-02", type: "TRANSFER", reference: "FT26070211", counterparty: "MTCC", narrative: "Incoming transfer", direction: "CREDIT", amt: 18750.0, currency: "MVR", reconStatus: "UNMATCHED", matchedVendor: null },
+  { id: "bt-5", accountId: "ba-mvr", isoDate: "2026-06-28", type: "TRANSFER", reference: "FT26062830", counterparty: "Beaver Builders", narrative: "Transfer", direction: "DEBIT", amt: 4572.42, currency: "MVR", reconStatus: "UNMATCHED", matchedVendor: null },
+  { id: "bt-6", accountId: "ba-mvr", isoDate: "2026-06-22", type: "CHARGE", reference: "SC26062201", counterparty: "Bank of Maldives", narrative: "Monthly service charge", direction: "DEBIT", amt: 1250.0, currency: "MVR", reconStatus: "EXCLUDED", matchedVendor: null },
+  { id: "bt-7", accountId: "ba-mvr", isoDate: "2026-06-18", type: "TRANSFER", reference: "FT26061808", counterparty: "Ives Private Limited", narrative: "Supplier payment", direction: "DEBIT", amt: 6522.75, currency: "MVR", reconStatus: "SUGGESTED", matchedVendor: "Ives Private Limited" },
+  { id: "bt-8", accountId: "ba-mvr", isoDate: "2026-06-14", type: "TRANSFER", reference: "FT26061422", counterparty: "Card Settlement", narrative: "POS card settlement — BML Merchant", direction: "CREDIT", amt: 32500.0, currency: "MVR", reconStatus: "MATCHED", matchedVendor: null },
+  { id: "bt-9", accountId: "ba-mvr", isoDate: "2026-06-09", type: "TRANSFER", reference: "FT26060917", counterparty: "Island Mark Hardware", narrative: "Transfer to IMH", direction: "DEBIT", amt: 4644.0, currency: "MVR", reconStatus: "SUGGESTED", matchedVendor: "Island Mark Hardware Pvt Ltd" },
+  { id: "bt-10", accountId: "ba-mvr", isoDate: "2026-06-05", type: "TRANSFER", reference: "FT26060544", counterparty: "Altura Pvt Ltd", narrative: "Payment ALT/INV-000024", direction: "DEBIT", amt: 98280.0, currency: "MVR", reconStatus: "MATCHED", matchedVendor: "Altura Pvt Ltd" },
+  { id: "bt-11", accountId: "ba-mvr", isoDate: "2026-06-03", type: "TRANSFER", reference: "FT26060312", counterparty: "Card Settlement", narrative: "POS card settlement — BML Merchant", direction: "CREDIT", amt: 45000.0, currency: "MVR", reconStatus: "MATCHED", matchedVendor: null },
+  { id: "bt-12", accountId: "ba-usd", isoDate: "2026-07-08", type: "WIRE", reference: "TT26070801", counterparty: "Export Receipt", narrative: "Inbound settlement", direction: "CREDIT", amt: 3200.0, currency: "USD", reconStatus: "UNMATCHED", matchedVendor: null },
+  { id: "bt-13", accountId: "ba-usd", isoDate: "2026-06-20", type: "WIRE", reference: "TT26062001", counterparty: "Overseas Supplier", narrative: "Import wire", direction: "DEBIT", amt: 1450.0, currency: "USD", reconStatus: "UNMATCHED", matchedVendor: null },
+];
+
+/** Closing balances mirroring the seeded running_balance of each account. */
+const DEMO_BANK_BALANCES: Record<string, number> = { "ba-mvr": 246048.63, "ba-usd": 9750.0 };
 
 /** A small starter chart of accounts, matching the seeded Supabase demo org. */
 const STARTER_ACCOUNTS: AccountRow[] = [
@@ -230,6 +259,33 @@ export class MemoryStore implements LedgerStore {
         status: itemStatus(qty, threshold),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async listBankAccounts(): Promise<BankAccountRow[]> {
+    return DEMO_BANK_ACCOUNTS.map((a) => {
+      const txns = DEMO_BANK_TXNS.filter((t) => t.accountId === a.id);
+      return {
+        id: a.id,
+        name: a.name,
+        bankName: a.bankName,
+        accountMasked: a.accountMasked,
+        currency: a.currency,
+        linkedAccount: a.linked,
+        balance: DEMO_BANK_BALANCES[a.id] ?? 0,
+        txnCount: txns.length,
+        unreconciled: txns.filter((t) => ["UNMATCHED", "SUGGESTED"].includes(t.reconStatus)).length,
+      };
+    });
+  }
+
+  async listBankTransactions(): Promise<BankTxnRow[]> {
+    const names = new Map(DEMO_BANK_ACCOUNTS.map((a) => [a.id, a.name]));
+    return DEMO_BANK_TXNS.map(({ amt, ...t }) => ({
+      ...t,
+      accountName: names.get(t.accountId) ?? "",
+      date: formatBillDate(t.isoDate),
+      amount: bankTxnSigned(t.direction, amt),
+    }));
   }
 
   async listVendors(): Promise<VendorRow[]> {

@@ -4,12 +4,12 @@ import {
   CalendarClock, Search, Bell, ChevronRight, ChevronDown, TrendingUp,
   TrendingDown, Check, X, Sparkles, ShieldCheck, Wallet, ArrowUpRight,
   Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings,
-  Users, BarChart3
+  Users, BarChart3, ArrowDownLeft, Link2
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, approveBill, rejectBill, API_BASE } from "./api.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
 
@@ -1525,6 +1525,207 @@ function Inventory() {
 }
 
 /* ---------------------------------------------------------------------------
+   Banking — bank accounts + statement reconciliation
+--------------------------------------------------------------------------- */
+const RECON_META = {
+  MATCHED: { t: "Matched", bg: T.claimSoft, fg: T.claim },
+  SUGGESTED: { t: "Suggested", bg: T.goldSoft, fg: T.warn },
+  UNMATCHED: { t: "Unmatched", bg: T.exemptSoft, fg: T.exempt },
+  EXCLUDED: { t: "Excluded", bg: "#EEF1EF", fg: T.muted },
+};
+const ReconChip = ({ s }) => {
+  const x = RECON_META[s] || RECON_META.UNMATCHED;
+  return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
+    padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
+};
+const BANKING_DEMO = {
+  currency: "MVR", mvrBalance: 246048.63,
+  summary: { total: 13, unmatched: 4, suggested: 3, matched: 4, excluded: 2, unreconciled: 7 },
+  accounts: [
+    { id: "ba-mvr", name: "Business Current", bankName: "Bank of Maldives", accountMasked: "•••• 4021", currency: "MVR", linkedAccount: true, balance: 246048.63, txnCount: 11, unreconciled: 5 },
+    { id: "ba-usd", name: "USD Settlement", bankName: "Bank of Maldives", accountMasked: "•••• 8837", currency: "USD", linkedAccount: false, balance: 9750, txnCount: 2, unreconciled: 2 },
+  ],
+  transactions: [
+    { id: "bt-1", accountName: "Business Current", date: "12 Jul 2026", type: "TRANSFER", reference: "FT26071240", counterparty: "Card Settlement", narrative: "POS card settlement — BML Merchant", direction: "CREDIT", amount: 27300, currency: "MVR", reconStatus: "SUGGESTED", matchedVendor: null },
+    { id: "bt-2", accountName: "Business Current", date: "10 Jul 2026", type: "TRANSFER", reference: "FT26071005", counterparty: "Payroll", narrative: "Staff salary — July", direction: "DEBIT", amount: -12000, currency: "MVR", reconStatus: "EXCLUDED", matchedVendor: null },
+    { id: "bt-3", accountName: "Business Current", date: "06 Jul 2026", type: "TRANSFER", reference: "FT26070619", counterparty: "Island Choice LLP", narrative: "Payment IC-7781", direction: "DEBIT", amount: -232.2, currency: "MVR", reconStatus: "MATCHED", matchedVendor: "Island Choice LLP" },
+    { id: "bt-4", accountName: "Business Current", date: "02 Jul 2026", type: "TRANSFER", reference: "FT26070211", counterparty: "MTCC", narrative: "Incoming transfer", direction: "CREDIT", amount: 18750, currency: "MVR", reconStatus: "UNMATCHED", matchedVendor: null },
+    { id: "bt-5", accountName: "Business Current", date: "28 Jun 2026", type: "TRANSFER", reference: "FT26062830", counterparty: "Beaver Builders", narrative: "Transfer", direction: "DEBIT", amount: -4572.42, currency: "MVR", reconStatus: "UNMATCHED", matchedVendor: null },
+    { id: "bt-7", accountName: "Business Current", date: "18 Jun 2026", type: "TRANSFER", reference: "FT26061808", counterparty: "Ives Private Limited", narrative: "Supplier payment", direction: "DEBIT", amount: -6522.75, currency: "MVR", reconStatus: "SUGGESTED", matchedVendor: "Ives Private Limited" },
+    { id: "bt-10", accountName: "Business Current", date: "05 Jun 2026", type: "TRANSFER", reference: "FT26060544", counterparty: "Altura Pvt Ltd", narrative: "Payment ALT/INV-000024", direction: "DEBIT", amount: -98280, currency: "MVR", reconStatus: "MATCHED", matchedVendor: "Altura Pvt Ltd" },
+    { id: "bt-12", accountName: "USD Settlement", date: "08 Jul 2026", type: "WIRE", reference: "TT26070801", counterparty: "Export Receipt", narrative: "Inbound settlement", direction: "CREDIT", amount: 3200, currency: "USD", reconStatus: "UNMATCHED", matchedVendor: null },
+    { id: "bt-13", accountName: "USD Settlement", date: "20 Jun 2026", type: "WIRE", reference: "TT26062001", counterparty: "Overseas Supplier", narrative: "Import wire", direction: "DEBIT", amount: -1450, currency: "USD", reconStatus: "UNMATCHED", matchedVendor: null },
+  ],
+};
+const BANK_FILTERS = [
+  ["all", "All"],
+  ["review", "Needs review"],
+  ["MATCHED", "Matched"],
+  ["EXCLUDED", "Excluded"],
+];
+
+function Banking() {
+  const w = useW(); const wide = w >= 768;
+  const [data, setData] = useState(BANKING_DEMO);
+  const [live, setLive] = useState(false);
+  const [filter, setFilter] = useState("all");
+  useEffect(() => {
+    let alive = true;
+    getBanking()
+      .then((d) => { if (alive && d?.accounts) { setData(d); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const s = data.summary || { total: 0, matched: 0, unreconciled: 0 };
+  const txns = data.transactions.filter((t) =>
+    filter === "all" ? true
+      : filter === "review" ? ["UNMATCHED", "SUGGESTED"].includes(t.reconStatus)
+        : t.reconStatus === filter);
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="flex items-center gap-2 mb-4">
+        <Eyebrow>Banking &amp; reconciliation</Eyebrow>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+          fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
+          {live ? "LIVE" : "SAMPLE"}</span>
+      </div>
+
+      {/* Account cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
+        {data.accounts.map((a) => (
+          <div key={a.id} className="rounded-2xl p-5" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div style={{ width: 38, height: 38, borderRadius: 11, background: T.tealSoft,
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Landmark size={18} color={T.teal} />
+                </div>
+                <div className="min-w-0">
+                  <div style={{ fontSize: 14, fontWeight: 650, color: T.text }}>{a.name}</div>
+                  <div style={{ fontFamily: mono, fontSize: 11, color: T.faint }}>
+                    {a.bankName} · {a.accountMasked}</div>
+                </div>
+              </div>
+              <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 600, letterSpacing: "0.04em",
+                color: a.linkedAccount ? T.claim : T.faint, display: "inline-flex", alignItems: "center", gap: 3,
+                whiteSpace: "nowrap" }}>
+                <Link2 size={11} />{a.linkedAccount ? "Linked" : "Unlinked"}</span>
+            </div>
+            <div className="flex items-end justify-between mt-4">
+              <div>
+                <Eyebrow>Balance</Eyebrow>
+                <div style={{ ...num, fontSize: 22, fontWeight: 680, color: T.text,
+                  letterSpacing: "-0.02em", marginTop: 3 }}>
+                  {fmt(a.balance, a.currency)}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ ...num, fontSize: 12.5, color: T.muted }}>{a.txnCount} lines</div>
+                <div style={{ fontFamily: mono, fontSize: 11, fontWeight: 600,
+                  color: a.unreconciled ? T.warn : T.claim, marginTop: 2 }}>
+                  {a.unreconciled ? `${a.unreconciled} to review` : "reconciled"}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Reconciliation summary */}
+      <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-5">
+        <KpiTile label="Statement lines" value={String(s.total)} accent={T.text} />
+        <KpiTile label="Matched" value={String(s.matched)} accent={s.matched ? T.claim : T.text} />
+        <KpiTile label="To reconcile" value={String(s.unreconciled)} accent={s.unreconciled ? T.warn : T.claim} />
+      </div>
+
+      {/* Transactions */}
+      <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`, background: T.surface }}>
+        <div className="flex flex-wrap items-center gap-2 px-4 sm:px-6 py-4" style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>Bank statement</div>
+          <div className="flex items-center gap-1.5" style={{ marginLeft: "auto" }}>
+            {BANK_FILTERS.map(([id, label]) => {
+              const on = filter === id;
+              return (
+                <button key={id} onClick={() => setFilter(id)}
+                  style={{ fontFamily: mono, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.03em",
+                    padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                    border: `1px solid ${on ? T.teal : T.line}`,
+                    background: on ? T.teal : T.surface, color: on ? "#fff" : T.muted }}>
+                  {label}</button>
+              );
+            })}
+          </div>
+        </div>
+        {wide ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: T.paper }}>
+              {["Date", "Description", "Match", "Amount", "Status"].map((h, i) => (
+                <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "11px 16px",
+                  fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+                  color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+              ))}</tr></thead>
+            <tbody>
+              {txns.map((t) => {
+                const inflow = t.amount >= 0;
+                return (
+                  <tr key={t.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+                    <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
+                      <div style={{ ...num, fontSize: 12, color: T.text }}>{t.date}</div>
+                      <div style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>{t.accountName}</div></td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>{t.counterparty}</div>
+                      <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                        {t.reference} · {t.narrative}</div></td>
+                    <td style={{ padding: "13px 16px" }}>
+                      {t.matchedVendor
+                        ? <span style={{ fontSize: 12, color: T.muted }}>{t.matchedVendor}</span>
+                        : <span style={{ fontFamily: mono, fontSize: 11, color: T.faint }}>—</span>}</td>
+                    <td style={{ padding: "13px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, ...num,
+                        fontSize: 13, fontWeight: 650, color: inflow ? T.claim : T.text }}>
+                        {inflow ? <ArrowDownLeft size={13} color={T.claim} /> : <ArrowUpRight size={13} color={T.faint} />}
+                        {inflow ? "+" : "−"}{fmt(Math.abs(t.amount), t.currency)}</span></td>
+                    <td style={{ padding: "13px 16px" }}><ReconChip s={t.reconStatus} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div>
+            {txns.map((t, i) => {
+              const inflow = t.amount >= 0;
+              return (
+                <div key={t.id} className="px-4 py-3.5" style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div style={{ fontSize: 13.5, fontWeight: 600, color: T.text }}>{t.counterparty}</div>
+                      <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginTop: 1 }}>
+                        {t.date} · {t.accountName}</div></div>
+                    <div style={{ ...num, fontSize: 14, fontWeight: 700, whiteSpace: "nowrap",
+                      color: inflow ? T.claim : T.text }}>
+                      {inflow ? "+" : "−"}{fmt(Math.abs(t.amount), t.currency)}</div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <ReconChip s={t.reconStatus} />
+                    {t.matchedVendor && <span style={{ fontSize: 11.5, color: T.muted }}>{t.matchedVendor}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {txns.length === 0 && (
+          <div style={{ padding: "28px 16px", textAlign: "center", fontFamily: mono, fontSize: 12, color: T.faint }}>
+            No lines in this view.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
    Reports — financial KPIs, AP aging, spend analysis
 --------------------------------------------------------------------------- */
 const AGING_META = {
@@ -1797,7 +1998,8 @@ export default function App() {
           {active === "filing" && <TaxFiling />}
           {active === "reports" && <Reports />}
           {active === "inventory" && <Inventory />}
-          {!isCore && !["vendors", "filing", "reports", "inventory"].includes(active) && <Placeholder id={active} />}
+          {active === "banking" && <Banking />}
+          {!isCore && !["vendors", "filing", "reports", "inventory", "banking"].includes(active) && <Placeholder id={active} />}
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} counts={counts} />
