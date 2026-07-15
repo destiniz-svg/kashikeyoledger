@@ -199,6 +199,8 @@ export interface LedgerStore {
 
   listVendors(): Promise<VendorRow[]>;
   listGstFilings(): Promise<GstFilingRow[]>;
+  /** Taxpayer identity for filings (organization name + TIN). */
+  taxpayer(): Promise<{ name: string; tin: string }>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);
