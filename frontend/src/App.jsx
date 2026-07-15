@@ -1339,7 +1339,7 @@ export default function App() {
       <main className="flex-1 min-w-0 flex flex-col">
         <MobileHeader title={title} />
         <Topbar title={title} auth={auth} />
-        <div className="flex-1" style={{ paddingBottom: 64 }}>
+        <div className="flex-1" style={{ paddingBottom: 64 }} key={session ? "auth" : "anon"}>
           {active === "dashboard" && <Dashboard onNav={setActive} />}
           {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {active === "bills" && <Bills />}

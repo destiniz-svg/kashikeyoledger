@@ -13,7 +13,14 @@ import { getToken } from "./auth.js";
 export const API_BASE = BASE;
 
 async function get(path) {
-  const headers = KEY ? { "x-api-key": KEY } : {};
+  // A logged-in member's token authorizes reads too (works even when no
+  // read-only key is configured on the server); else fall back to the key.
+  const token = getToken();
+  const headers = token
+    ? { authorization: `Bearer ${token}` }
+    : KEY
+      ? { "x-api-key": KEY }
+      : {};
   const res = await fetch(`${BASE}${path}`, { headers });
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();

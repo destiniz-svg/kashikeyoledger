@@ -114,6 +114,7 @@ export class SupabaseStore implements LedgerStore {
   readonly org: string;
   readonly #url: string;
   readonly #key: string;
+  readonly #authCache = new Map<string, number>();
 
   constructor(config: SupabaseConfig) {
     this.#url = config.url.replace(/\/+$/, "");
@@ -377,6 +378,8 @@ export class SupabaseStore implements LedgerStore {
   }
 
   async verifyMember(token: string): Promise<boolean> {
+    const cachedExp = this.#authCache.get(token);
+    if (cachedExp && cachedExp > Date.now()) return true;
     try {
       const res = await fetch(`${this.#url}/auth/v1/user`, {
         headers: { apikey: this.#key, authorization: `Bearer ${token}` },
@@ -388,7 +391,9 @@ export class SupabaseStore implements LedgerStore {
         `/rest/v1/organization_members?organization_id=eq.${this.org}` +
           `&user_id=eq.${user.id}&select=role`,
       )) as unknown[];
-      return Array.isArray(rows) && rows.length > 0;
+      const ok = Array.isArray(rows) && rows.length > 0;
+      if (ok) this.#authCache.set(token, Date.now() + 60_000); // cache successes for 60s
+      return ok;
     } catch {
       return false;
     }
