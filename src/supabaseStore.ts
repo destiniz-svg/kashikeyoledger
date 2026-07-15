@@ -12,6 +12,7 @@ import {
   StoreError,
   agingBucket,
   formatBillDate,
+  vendorInitials,
   type AccountRow,
   type BillRow,
   type EntryInput,
@@ -21,6 +22,7 @@ import {
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
+  type VendorRow,
 } from "./store.ts";
 
 export interface SupabaseConfig {
@@ -345,6 +347,33 @@ export class SupabaseStore implements LedgerStore {
       body: JSON.stringify({ p_org: this.org, p_id: id, p_status: status }),
     })) as string;
     return { id, status: result };
+  }
+
+  async listVendors(): Promise<VendorRow[]> {
+    const rows = (await this.#request("/rest/v1/rpc/org_vendors", {
+      method: "POST",
+      body: JSON.stringify({ p_org: this.org }),
+    })) as {
+      id: string;
+      name: string;
+      tin: string | null;
+      gst_registered: boolean | null;
+      currency: string;
+      bill_count: string | number;
+      total_spend: string | number;
+      last_bill_date: string | null;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      tin: r.tin ?? "—",
+      gstRegistered: Boolean(r.gst_registered),
+      currency: r.currency,
+      billCount: Number(r.bill_count),
+      totalSpend: Number(r.total_spend),
+      lastBillDate: formatBillDate(r.last_bill_date),
+      ini: vendorInitials(r.name),
+    }));
   }
 
   async verifyMember(token: string): Promise<boolean> {

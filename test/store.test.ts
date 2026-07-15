@@ -205,6 +205,16 @@ test("the in-memory store has no auth provider (verifyMember is always false)", 
   assert.equal(await new MemoryStore().verifyMember("any-token"), false);
 });
 
+test("listVendors rolls up spend and bill count per vendor, sorted by spend", async () => {
+  const vendors = await new MemoryStore().listVendors();
+  assert.equal(vendors.length, 6);
+  assert.equal(vendors[0].name, "Altura Pvt Ltd"); // biggest spend first
+  assert.equal(vendors[0].totalSpend, 98280);
+  assert.equal(vendors[0].billCount, 1);
+  assert.equal(vendors[0].ini, "AL");
+  for (const v of vendors) assert.equal(typeof v.ini, "string");
+});
+
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
   const s = new MemoryStore();
   await s.recordSale({

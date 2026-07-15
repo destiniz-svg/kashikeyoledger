@@ -117,6 +117,19 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
+/** A vendor with spend rollups, shaped for the Vendors screen. */
+export interface VendorRow {
+  id: string;
+  name: string;
+  tin: string;
+  gstRegistered: boolean;
+  currency: string;
+  billCount: number;
+  totalSpend: number;
+  lastBillDate: string;
+  ini: string;
+}
+
 /** A purchase bill / expense, shaped for the Bills and Approval screens. */
 export interface BillRow {
   id: string;
@@ -166,6 +179,19 @@ export interface LedgerStore {
    * backends without an auth provider (e.g. the in-memory store).
    */
   verifyMember(token: string): Promise<boolean>;
+
+  listVendors(): Promise<VendorRow[]>;
+}
+
+const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);
+
+/** Two-letter initials for a vendor avatar, ignoring company suffixes. */
+export function vendorInitials(name: string): string {
+  const words = name
+    .split(/\s+/)
+    .filter((w) => !COMPANY_SUFFIX.has(w.toLowerCase().replace(/[^a-z]/gi, "")));
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return (words[0] ?? name).slice(0, 2).toUpperCase();
 }
 
 /** Statuses a bill may be moved to via the approval workflow. */

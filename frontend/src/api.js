@@ -35,5 +35,6 @@ async function post(path) {
 
 export const getDashboard = () => get("/dashboard");
 export const getBills = () => get("/bills");
+export const getVendors = () => get("/vendors");
 export const approveBill = (id) => post(`/bills/${encodeURIComponent(id)}/approve`);
 export const rejectBill = (id) => post(`/bills/${encodeURIComponent(id)}/reject`);

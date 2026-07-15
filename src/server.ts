@@ -136,6 +136,7 @@ const server = createServer(async (req, res) => {
           "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [write]",
           "GET /trial-balance  [read]",
           "GET /bills  [read]",
+          "GET /vendors  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
           "GET /sales  [read]",
@@ -280,6 +281,11 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/bills") {
       if (!readGuard(req, res)) return;
       return send(res, 200, await store.listBills());
+    }
+
+    if (method === "GET" && path === "/vendors") {
+      if (!readGuard(req, res)) return;
+      return send(res, 200, await store.listVendors());
     }
 
     const billAction = /^\/bills\/([^/]+)\/(approve|reject)$/.exec(path);
