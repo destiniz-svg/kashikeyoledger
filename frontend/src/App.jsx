@@ -10,6 +10,7 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
 import { getDashboard, getBills, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -365,7 +366,7 @@ function BottomNav({ active, onNav }) {
 }
 
 /* ---- Desktop topbar (title + search + bell + add) ------------------------ */
-function Topbar({ title }) {
+function Topbar({ title, auth }) {
   return (
     <div className="hidden lg:flex items-center justify-between px-8 py-5"
       style={{ borderBottom: `1px solid ${T.line}`, background: T.surface }}>
@@ -378,6 +379,24 @@ function Topbar({ title }) {
           <input placeholder="Search…" className="bg-transparent outline-none w-full"
             style={{ fontSize: 12.5, color: T.text }} />
         </div>
+        {auth && (auth.session ? (
+          <div className="flex items-center gap-2 rounded-lg px-3 py-2"
+            style={{ border: `1px solid ${T.line}` }}>
+            <div style={{ width: 22, height: 22, borderRadius: 999, background: T.tealSoft,
+              color: T.teal, display: "grid", placeItems: "center", fontFamily: mono,
+              fontSize: 10, fontWeight: 700 }}>
+              {(auth.session.user?.email || "?").slice(0, 2).toUpperCase()}</div>
+            <span style={{ fontSize: 12, color: T.text, maxWidth: 140, overflow: "hidden",
+              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{auth.session.user?.email}</span>
+            <button onClick={auth.onSignOut} style={{ fontSize: 11.5, color: T.muted, fontWeight: 600 }}
+              className="focus:outline-none">Sign out</button>
+          </div>
+        ) : (
+          <button onClick={auth.onSignIn}
+            className="rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
+            style={{ border: `1px solid ${T.line}`, fontSize: 12.5, color: T.teal,
+              fontWeight: 600, minHeight: 38 }}>Sign in</button>
+        ))}
         <button className="rounded-lg p-2 relative focus:outline-none"
           style={{ border: `1px solid ${T.line}`, background: T.surface }}>
           <Bell size={16} color={T.muted} />
@@ -827,7 +846,7 @@ function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
   );
 }
 
-function Approval() {
+function Approval({ session, onRequireLogin }) {
   const w = useW(); const desktop = w >= 1024;
   const [bills, setBills] = useState(BILLS);
   const [live, setLive] = useState(false);
@@ -851,25 +870,27 @@ function Approval() {
 
   async function doApprove() {
     if (!b || busy) return;
+    if (live && !session) { onRequireLogin(); return; }
     setBusy(true); setErr(null);
     try {
       if (live) await approveBill(b.id); // only reflect success if the write lands
       setApprovedIds((prev) => new Set(prev).add(b.id));
     } catch {
-      setErr("Approve failed — writes need the full API key, not the read-only key.");
+      setErr("Approve failed — please sign in again.");
     } finally {
       setBusy(false);
     }
   }
   async function doReject() {
     if (!b || busy) return;
+    if (live && !session) { onRequireLogin(); return; }
     setBusy(true); setErr(null);
     try {
       if (live) await rejectBill(b.id);
       setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status: "REJECTED" } : x)));
       setSel(null);
     } catch {
-      setErr("Reject failed — writes need the full API key, not the read-only key.");
+      setErr("Reject failed — please sign in again.");
     } finally {
       setBusy(false);
     }
@@ -1123,10 +1144,65 @@ const TITLES = {
   reports: "Reports", txns: "All transactions", settings: "Settings",
 };
 
+function LoginModal({ onClose, onSignedIn }) {
+  const [email, setEmail] = useState("owner@kashikeyo.local");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const input = {
+    width: "100%", marginTop: 6, marginBottom: 14, padding: "10px 12px",
+    border: `1px solid ${T.line}`, borderRadius: 9, fontSize: 13, color: T.text,
+    background: T.paper, outline: "none",
+  };
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try { onSignedIn(await signIn(email, password)); }
+    catch (ex) { setErr(ex.message || "Sign-in failed"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60,
+      background: "rgba(11,42,46,0.45)", display: "grid", placeItems: "center", padding: 16 }}>
+      <form onClick={(e) => e.stopPropagation()} onSubmit={submit}
+        style={{ background: T.surface, borderRadius: 16, padding: 24, width: "100%",
+          maxWidth: 360, border: `1px solid ${T.line}` }}>
+        <div style={{ fontSize: 16, fontWeight: 680, color: T.text }}>Sign in</div>
+        <div style={{ fontSize: 12, color: T.muted, marginTop: 4, marginBottom: 16 }}>
+          Sign in to approve bills or record entries.</div>
+        {!authConfigured && (
+          <div style={{ background: T.warnSoft, border: "1px solid #E7D3A6", borderRadius: 8,
+            padding: 10, fontSize: 11.5, color: T.warn, marginBottom: 14 }}>
+            Auth isn't configured (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).</div>
+        )}
+        <Eyebrow>Email</Eyebrow>
+        <input style={input} value={email} onChange={(e) => setEmail(e.target.value)}
+          type="email" autoComplete="username" />
+        <Eyebrow>Password</Eyebrow>
+        <input style={input} value={password} onChange={(e) => setPassword(e.target.value)}
+          type="password" autoComplete="current-password" />
+        {err && <div style={{ color: T.exempt, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+        <button type="submit" disabled={busy}
+          className="w-full rounded-lg focus:outline-none transition-opacity hover:opacity-90"
+          style={{ background: T.claim, color: "#fff", fontSize: 13.5, fontWeight: 600,
+            minHeight: 44, opacity: busy ? 0.7 : 1 }}>
+          {busy ? "Signing in…" : "Sign in"}</button>
+      </form>
+    </div>
+  );
+}
+
 export default function App() {
   const [active, setActive] = useState("dashboard");
+  const [session, setSession] = useState(() => getSession());
+  const [loginOpen, setLoginOpen] = useState(false);
   const title = TITLES[active] || "Kashikeyo";
   const isCore = ["dashboard", "approval", "bills"].includes(active);
+  const auth = {
+    session,
+    onSignIn: () => setLoginOpen(true),
+    onSignOut: () => { signOut(); setSession(null); },
+  };
 
   return (
     <div style={{ fontFamily: sans, color: T.text, minHeight: "100vh", display: "flex",
@@ -1141,15 +1217,17 @@ export default function App() {
       <Sidebar active={active} onNav={setActive} />
       <main className="flex-1 min-w-0 flex flex-col">
         <MobileHeader title={title} />
-        <Topbar title={title} />
+        <Topbar title={title} auth={auth} />
         <div className="flex-1" style={{ paddingBottom: 64 }}>
           {active === "dashboard" && <Dashboard onNav={setActive} />}
-          {active === "approval" && <Approval />}
+          {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {active === "bills" && <Bills />}
           {!isCore && <Placeholder id={active} />}
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} />
+      {loginOpen && <LoginModal onClose={() => setLoginOpen(false)}
+        onSignedIn={(s) => { setSession(s); setLoginOpen(false); }} />}
     </div>
   );
 }

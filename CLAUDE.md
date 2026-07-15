@@ -20,10 +20,12 @@ Two layers:
 Writes to Supabase go through the `post_journal_entry` SQL function (see
 `supabase/functions.sql`) so the insert is atomic and balance-checked in the DB.
 
-Write requests (any POST/PUT/PATCH/DELETE) require an API key via `src/auth.ts`
-(`KASHIKEYO_API_KEY`); data reads require the full key or an optional read-only
-`KASHIKEYO_READ_API_KEY` (reads stay open only when no key is configured).
-Write auth is **fail-closed** — with no key configured, writes are rejected (503).
+Write requests (any POST/PUT/PATCH/DELETE) require the `KASHIKEYO_API_KEY`
+**or** a Supabase access token from a logged-in `organization_members` user
+(`store.verifyMember()` checks the token via `/auth/v1/user` + membership).
+Data reads require the full key or an optional read-only `KASHIKEYO_READ_API_KEY`
+(reads stay open only when no key is configured). Write auth is **fail-closed**.
+The web app (`frontend/`) signs users in with Supabase Auth and sends the token.
 
 **Revenue** is not in the journal (no `INCOME` account type). `POST /sales`
 records a `POS_SALE` in `transactions` + `transaction_line_items` via the

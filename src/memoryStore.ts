@@ -177,4 +177,8 @@ export class MemoryStore implements LedgerStore {
     bill.status = status;
     return { id, status };
   }
+
+  async verifyMember(): Promise<boolean> {
+    return false; // no auth provider for the in-memory backend
+  }
 }

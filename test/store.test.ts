@@ -201,6 +201,10 @@ test("setBillStatus on an unknown bill is rejected", async () => {
   await assert.rejects(() => new MemoryStore().setBillStatus("nope", "REJECTED"), /not found/);
 });
 
+test("the in-memory store has no auth provider (verifyMember is always false)", async () => {
+  assert.equal(await new MemoryStore().verifyMember("any-token"), false);
+});
+
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
   const s = new MemoryStore();
   await s.recordSale({

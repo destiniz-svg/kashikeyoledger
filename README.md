@@ -113,10 +113,17 @@ curl "$BASE_URL/trial-balance" -H "X-API-Key: $KASHIKEYO_API_KEY"
 # or:  -H "Authorization: Bearer $KASHIKEYO_API_KEY"
 ```
 
-**Writes** (`POST /accounts`, `/entries`, `/sales`) require the full
-`KASHIKEYO_API_KEY`. They are **fail-closed**: `401` if no key is presented,
-`403` if it is wrong, and `503` if the server has no key configured (writes are
-never left open).
+**Writes** (`POST /accounts`, `/entries`, `/sales`, `/bills/:id/approve|reject`)
+require **either** the full `KASHIKEYO_API_KEY` (server-to-server) **or** a
+Supabase access token from a logged-in **organization member** (browser users) —
+sent as `Authorization: Bearer <token>`. The server verifies the token against
+Supabase Auth and checks `organization_members`. They are **fail-closed**: `401`
+if nothing is presented, `403` if invalid, `503` if no key is configured.
+
+The **web frontend** authenticates users with Supabase Auth (email/password) and
+sends the member token on writes. It reads with the read-only key. Build-time
+env vars for the site: `VITE_API_BASE_URL`, `VITE_API_KEY` (read-only),
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 
 **Reads** (`GET /accounts`, `/entries`, `/trial-balance`, `/sales`, `/revenue`)
 accept either the full key or an optional read-only `KASHIKEYO_READ_API_KEY`.
