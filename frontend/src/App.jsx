@@ -1,0 +1,983 @@
+import React, { useState, useEffect } from "react";
+import {
+  LayoutDashboard, ReceiptText, CheckCircle2, Package, Landmark,
+  CalendarClock, Search, Bell, ChevronRight, ChevronDown, TrendingUp,
+  TrendingDown, Check, X, Sparkles, ShieldCheck, Wallet, ArrowUpRight,
+  Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings,
+  Users, BarChart3
+} from "lucide-react";
+import {
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
+} from "recharts";
+
+/* ---------------------------------------------------------------------------
+   Design tokens — "ledger at depth", now on a light, airy 44-style canvas
+--------------------------------------------------------------------------- */
+const T = {
+  ink: "#0B2A2E", inkSoft: "#123A40",
+  paper: "#F7F8F6", surface: "#FFFFFF", line: "#E7EAE7", line2: "#F0F2EF",
+  gold: "#B8892B", goldSoft: "#F4EAD0",
+  teal: "#2A6F77", tealSoft: "#E6F0F0", tealSofter: "#F0F6F6",
+  claim: "#127A5A", claimSoft: "#E0F0E8",
+  warn: "#9C6A15", warnSoft: "#F6EBD6",
+  exempt: "#A2382A", exemptSoft: "#F6E3DF",
+  text: "#0F2124", muted: "#5B6B69", faint: "#8A9896",
+};
+const mono = 'ui-monospace, "SF Mono", "SFMono-Regular", Menlo, monospace';
+const sans = '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const num = { fontFamily: mono, fontVariantNumeric: "tabular-nums" };
+
+const fmt = (n, cur = "MVR") =>
+  `${cur === "MVR" ? "Rf" : "$"} ${Number(n).toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmt0 = (n) => `Rf ${Number(n).toLocaleString("en-US")}`;
+
+function useW() {
+  const [w, setW] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1280);
+  useEffect(() => {
+    const on = () => setW(window.innerWidth);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return w;
+}
+
+/* ---------------------------------------------------------------------------
+   Seed data (Altura invoices + BML statement vendors)
+--------------------------------------------------------------------------- */
+const BILLS = [
+  { id: "b1", vendor: "Altura Pvt Ltd", tin: "1145053", invoice: "ALT/INV-000024",
+    po: "PO-RDC-2026-003845", date: "05 Jul 2026", due: "20 Jul 2026", cur: "MVR",
+    subtotal: 91000, rate: 8, gst: 7280, total: 98280, cat: "Equipment",
+    taxCat: "GGST", status: "AI_VERIFIED", aging: "current",
+    line: "Concrete Mixer (50KG – 1 Bag)", qty: 1, unit: 91000 },
+  { id: "b2", vendor: "Island Mark Hardware Pvt Ltd", tin: "—", invoice: "IMH-4471",
+    po: "—", date: "11 May 2026", due: "26 May 2026", cur: "MVR",
+    subtotal: 4300, rate: 8, gst: 344, total: 4644, cat: "Hardware",
+    taxCat: "GGST", status: "DRAFT", aging: "current",
+    line: "Assorted fixings & tools", qty: 12, unit: 358.33 },
+  { id: "b3", vendor: "Ives Private Limited", tin: "—", invoice: "IVS-2026-118",
+    po: "—", date: "11 May 2026", due: "25 May 2026", cur: "MVR",
+    subtotal: 6039.58, rate: 8, gst: 483.17, total: 6522.75, cat: "Supplies",
+    taxCat: "GGST", status: "AI_VERIFIED", aging: "1_30",
+    line: "Packaging & consumables", qty: 1, unit: 6039.58 },
+  { id: "b4", vendor: "Tree Top Health Pvt Ltd", tin: "—", invoice: "TTH-9930",
+    po: "—", date: "05 Feb 2026", due: "20 Feb 2026", cur: "MVR",
+    subtotal: 5809, rate: 0, gst: 0, total: 5809, cat: "Health",
+    taxCat: "EXEMPT", status: "AI_VERIFIED", aging: "90_plus",
+    line: "Staff medical services", qty: 1, unit: 5809 },
+  { id: "b5", vendor: "Beaver Builders Private Limited", tin: "—", invoice: "BB-3382",
+    po: "—", date: "14 Jun 2026", due: "29 Jun 2026", cur: "MVR",
+    subtotal: 4233.72, rate: 8, gst: 338.70, total: 4572.42, cat: "Construction",
+    taxCat: "GGST", status: "DRAFT", aging: "1_30",
+    line: "Site labour & materials", qty: 1, unit: 4233.72 },
+  { id: "b6", vendor: "Island Choice LLP", tin: "—", invoice: "IC-7781",
+    po: "—", date: "12 May 2026", due: "27 May 2026", cur: "MVR",
+    subtotal: 215, rate: 8, gst: 17.20, total: 232.20, cat: "F&B",
+    taxCat: "GGST", status: "ACCOUNTANT_APPROVED", aging: "current",
+    line: "Café supplies", qty: 1, unit: 215 },
+];
+
+const TREND = [
+  { m: "Jan", val: 42513 }, { m: "Feb", val: 55120 }, { m: "Mar", val: 48300 },
+  { m: "Apr", val: 61240 }, { m: "May", val: 72110 }, { m: "Jun", val: 95400 },
+  { m: "Jul", val: 120830 }, { m: "Aug", val: 88900 }, { m: "Sep", val: 101200 },
+  { m: "Oct", val: 93400 }, { m: "Nov", val: 86750 }, { m: "Dec", val: 118200 },
+];
+
+const BY_CATEGORY = [
+  { name: "Construction", n: 14, amt: 102513, color: T.teal },
+  { name: "Equipment", n: 1, amt: 91000, color: T.ink },
+  { name: "Supplies", n: 3, amt: 6040, color: T.gold },
+  { name: "Health", n: 1, amt: 5809, color: T.exempt },
+  { name: "Hardware", n: 2, amt: 4300, color: T.warn },
+  { name: "F&B", n: 5, amt: 4128, color: T.claim },
+];
+const BY_VENDOR = [
+  { name: "Altura Pvt Ltd", n: 1, amt: 98280, ini: "AL" },
+  { name: "Beaver Builders", n: 6, amt: 42300, ini: "BB" },
+  { name: "Island Mark Hardware", n: 4, amt: 12644, ini: "IM" },
+  { name: "Ives Private Ltd", n: 1, amt: 6523, ini: "IV" },
+  { name: "Tree Top Health", n: 1, amt: 5809, ini: "TT" },
+  { name: "Island Choice LLP", n: 8, amt: 3232, ini: "IC" },
+];
+const BY_TAX = [
+  { name: "GGST 8%", n: 28, amt: 198281, color: T.teal, claim: true },
+  { name: "Zero-rated", n: 6, amt: 9700, color: T.claim, claim: true },
+  { name: "Exempt · Sec 20", n: 1, amt: 5809, color: T.exempt, claim: false },
+];
+
+/* ---------------------------------------------------------------------------
+   Shared bits
+--------------------------------------------------------------------------- */
+const Eyebrow = ({ children, style }) => (
+  <div style={{ fontFamily: mono, letterSpacing: "0.14em", fontSize: 10.5,
+    textTransform: "uppercase", color: T.faint, ...style }}>{children}</div>
+);
+
+const STATUS = {
+  DRAFT: { t: "Draft", bg: "#EEF1EF", fg: T.muted },
+  AI_VERIFIED: { t: "AI verified", bg: T.tealSoft, fg: T.teal },
+  ACCOUNTANT_APPROVED: { t: "Approved", bg: T.claimSoft, fg: T.claim },
+  SYNCED: { t: "Synced", bg: T.goldSoft, fg: T.warn },
+};
+const StatusPill = ({ s }) => {
+  const x = STATUS[s];
+  return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
+    padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
+};
+
+const TAXCAT = {
+  GGST: { t: "GGST 8%", bg: T.tealSoft, fg: T.teal },
+  TGST: { t: "TGST 17%", bg: T.goldSoft, fg: T.warn },
+  ZERO_RATED: { t: "Zero-rated", bg: T.claimSoft, fg: T.claim },
+  EXEMPT: { t: "Exempt", bg: T.exemptSoft, fg: T.exempt },
+};
+const TaxChip = ({ c }) => {
+  const x = TAXCAT[c];
+  return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
+    padding: "3px 8px", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
+};
+
+/* ---------------------------------------------------------------------------
+   Navigation model (nested, 44-style)
+--------------------------------------------------------------------------- */
+const NAV = [
+  { id: "dashboard", label: "Dashboard", short: "Overview", icon: LayoutDashboard },
+  { id: "bills", label: "Bills to pay", short: "Bills", icon: ReceiptText, badge: 6 },
+  { id: "approval", label: "Approvals", short: "Approve", icon: CheckCircle2, badge: 3 },
+  { group: "Purchases", icon: Wallet, children: [
+      { id: "vendors", label: "Vendors" },
+      { id: "inventory", label: "Inventory" },
+      { id: "txns", label: "All transactions" },
+  ]},
+  { id: "banking", label: "Banking", short: "Banking", icon: Landmark, tag: "Beta" },
+  { id: "reports", label: "Reports", icon: BarChart3 },
+  { id: "filing", label: "Tax filing", short: "Filing", icon: CalendarClock },
+  { id: "settings", label: "Settings", icon: Settings },
+];
+const PRIMARY = ["dashboard", "approval", "bills", "banking"];
+const MORE = ["inventory", "vendors", "reports", "filing", "settings", "txns"];
+
+/* ---- Light nested sidebar ------------------------------------------------ */
+function Sidebar({ active, onNav }) {
+  const [open, setOpen] = useState(true);
+  const childActive = ["vendors", "inventory", "txns"].includes(active);
+
+  const Item = ({ n }) => {
+    const on = active === n.id; const Icon = n.icon;
+    return (
+      <button onClick={() => onNav(n.id)}
+        className="flex items-center gap-3 rounded-lg text-left transition-colors focus:outline-none"
+        style={{ padding: "9px 11px", position: "relative",
+          background: on ? T.tealSoft : "transparent",
+          color: on ? T.teal : T.text, fontSize: 13.5, fontWeight: on ? 600 : 460 }}>
+        <Icon size={17} strokeWidth={2} style={{ color: on ? T.teal : T.faint }} />
+        <span className="flex-1">{n.label}</span>
+        {n.badge && <span style={{ background: on ? T.teal : T.line2, color: on ? "#fff" : T.muted,
+          fontFamily: mono, fontSize: 10.5, fontWeight: 700, borderRadius: 999,
+          padding: "1px 7px" }}>{n.badge}</span>}
+        {n.tag && <span style={{ border: `1px solid ${T.line}`, color: T.gold, fontFamily: mono,
+          fontSize: 9.5, borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>{n.tag}</span>}
+      </button>
+    );
+  };
+
+  return (
+    <aside style={{ background: T.surface, width: 244, borderRight: `1px solid ${T.line}` }}
+      className="shrink-0 flex-col min-h-screen hidden lg:flex">
+      {/* workspace switcher */}
+      <div className="px-4 pt-5 pb-4">
+        <button className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors focus:outline-none"
+          style={{ border: `1px solid ${T.line}` }}>
+          <div style={{ width: 30, height: 30, borderRadius: 9, background: T.gold,
+            display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <span style={{ fontFamily: mono, fontWeight: 700, color: T.ink, fontSize: 15 }}>K</span>
+          </div>
+          <div className="flex-1 text-left min-w-0">
+            <div style={{ fontSize: 13.5, fontWeight: 650, color: T.text }}>Kashikeyo</div>
+            <div style={{ fontSize: 10, color: T.faint, fontFamily: mono }}>Ledger · MV</div>
+          </div>
+          <ChevronDown size={15} color={T.faint} />
+        </button>
+      </div>
+
+      <div className="px-3 flex flex-col gap-0.5 flex-1 overflow-y-auto">
+        {NAV.map((n, i) => {
+          if (n.group) {
+            return (
+              <div key={i} className="mt-1">
+                <button onClick={() => setOpen((o) => !o)}
+                  className="w-full flex items-center gap-3 rounded-lg text-left focus:outline-none"
+                  style={{ padding: "9px 11px", color: childActive ? T.teal : T.muted,
+                    fontSize: 13.5, fontWeight: 540 }}>
+                  <n.icon size={17} strokeWidth={2}
+                    style={{ color: childActive ? T.teal : T.faint }} />
+                  <span className="flex-1">{n.group}</span>
+                  <ChevronDown size={14} color={T.faint}
+                    style={{ transform: open ? "none" : "rotate(-90deg)", transition: "transform .15s" }} />
+                </button>
+                {open && (
+                  <div className="flex flex-col" style={{ marginLeft: 27,
+                    borderLeft: `1px solid ${T.line}`, paddingLeft: 6, marginTop: 2 }}>
+                    {n.children.map((c) => {
+                      const on = active === c.id;
+                      return (
+                        <button key={c.id} onClick={() => onNav(c.id)}
+                          className="text-left rounded-lg focus:outline-none transition-colors"
+                          style={{ padding: "7px 10px", fontSize: 13,
+                            color: on ? T.teal : T.muted, fontWeight: on ? 600 : 450,
+                            background: on ? T.tealSofter : "transparent" }}>
+                          {c.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+          return <Item key={n.id} n={n} />;
+        })}
+      </div>
+
+      {/* company switcher + data toggle */}
+      <div className="px-3 py-3" style={{ borderTop: `1px solid ${T.line}` }}>
+        <button className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 focus:outline-none"
+          style={{ background: T.paper }}>
+          <div style={{ width: 26, height: 26, borderRadius: 999, background: T.teal,
+            display: "grid", placeItems: "center", color: "#fff", fontFamily: mono,
+            fontSize: 10.5, fontWeight: 700, flexShrink: 0 }}>RD</div>
+          <div className="flex-1 text-left min-w-0">
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: T.text, overflow: "hidden",
+              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Road Dev Corp</div>
+          </div>
+          <ChevronDown size={14} color={T.faint} />
+        </button>
+        <div className="flex items-center justify-between px-2.5 mt-2.5">
+          <span style={{ fontSize: 12, color: T.muted }}>Demo data</span>
+          <span style={{ width: 34, height: 20, borderRadius: 999, background: T.teal,
+            position: "relative", display: "inline-block" }}>
+            <span style={{ position: "absolute", top: 2, right: 2, width: 16, height: 16,
+              borderRadius: 999, background: "#fff" }} />
+          </span>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/* ---- Mobile top bar + bottom nav ----------------------------------------- */
+function MobileHeader({ title }) {
+  return (
+    <div className="flex lg:hidden items-center justify-between px-4 py-3"
+      style={{ borderBottom: `1px solid ${T.line}`, background: T.surface,
+        position: "sticky", top: 0, zIndex: 30 }}>
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: T.gold,
+          display: "grid", placeItems: "center", flexShrink: 0 }}>
+          <span style={{ fontFamily: mono, fontWeight: 700, color: T.ink, fontSize: 14 }}>K</span>
+        </div>
+        <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text, overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button className="rounded-lg p-2 focus:outline-none" style={{ background: T.paper }}>
+          <Search size={17} color={T.muted} /></button>
+        <button className="rounded-lg p-2 relative focus:outline-none" style={{ background: T.paper }}>
+          <Bell size={17} color={T.muted} />
+          <span style={{ position: "absolute", top: 6, right: 6, width: 6, height: 6,
+            borderRadius: 999, background: T.gold }} /></button>
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({ active, onNav }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const inMore = MORE.includes(active);
+  const tabs = PRIMARY.map((id) => NAV.find((n) => n.id === id));
+  return (
+    <>
+      {moreOpen && (
+        <div onClick={() => setMoreOpen(false)} className="lg:hidden"
+          style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(11,42,46,0.4)" }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ position: "absolute", left: 0, right: 0, bottom: 64, background: T.surface,
+              borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 12,
+              boxShadow: "0 -8px 30px rgba(11,42,46,0.15)" }}>
+            <div style={{ width: 36, height: 4, borderRadius: 4, background: T.line,
+              margin: "4px auto 12px" }} />
+            {[["inventory", Package, "Inventory"], ["vendors", Users, "Vendors"],
+              ["reports", BarChart3, "Reports"], ["filing", CalendarClock, "Tax filing"],
+              ["settings", Settings, "Settings"]].map(([id, Icon, label]) => {
+              const on = active === id;
+              return (
+                <button key={id} onClick={() => { onNav(id); setMoreOpen(false); }}
+                  className="w-full flex items-center gap-3 rounded-xl focus:outline-none"
+                  style={{ padding: "13px 14px", background: on ? T.tealSoft : "transparent",
+                    color: on ? T.teal : T.text, fontSize: 14.5, fontWeight: 550 }}>
+                  <Icon size={19} color={on ? T.teal : T.muted} /> {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <nav className="flex lg:hidden" style={{ position: "fixed", left: 0, right: 0, bottom: 0,
+        zIndex: 45, background: T.surface, borderTop: `1px solid ${T.line}`, height: 64,
+        paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {tabs.map((n) => {
+          const on = active === n.id; const Icon = n.icon;
+          return (
+            <button key={n.id} onClick={() => onNav(n.id)}
+              className="flex-1 flex flex-col items-center justify-center gap-1 focus:outline-none"
+              style={{ color: on ? T.teal : T.faint, position: "relative" }}>
+              {on && <span style={{ position: "absolute", top: 0, width: 26, height: 3,
+                borderRadius: 3, background: T.gold }} />}
+              <div className="relative">
+                <Icon size={21} strokeWidth={on ? 2.4 : 2} />
+                {n.badge && <span style={{ position: "absolute", top: -5, right: -8, background: T.gold,
+                  color: T.ink, fontFamily: mono, fontSize: 9, fontWeight: 700, borderRadius: 999,
+                  padding: "0px 4px", lineHeight: "14px" }}>{n.badge}</span>}
+              </div>
+              <span style={{ fontSize: 10, fontWeight: on ? 650 : 500 }}>{n.short}</span>
+            </button>
+          );
+        })}
+        <button onClick={() => setMoreOpen(true)}
+          className="flex-1 flex flex-col items-center justify-center gap-1 focus:outline-none"
+          style={{ color: inMore ? T.teal : T.faint, position: "relative" }}>
+          {inMore && <span style={{ position: "absolute", top: 0, width: 26, height: 3,
+            borderRadius: 3, background: T.gold }} />}
+          <MoreHorizontal size={21} strokeWidth={inMore ? 2.4 : 2} />
+          <span style={{ fontSize: 10, fontWeight: inMore ? 650 : 500 }}>More</span>
+        </button>
+      </nav>
+    </>
+  );
+}
+
+/* ---- Desktop topbar (title + search + bell + add) ------------------------ */
+function Topbar({ title }) {
+  return (
+    <div className="hidden lg:flex items-center justify-between px-8 py-5"
+      style={{ borderBottom: `1px solid ${T.line}`, background: T.surface }}>
+      <h1 style={{ fontSize: 21, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
+        {title}</h1>
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2"
+          style={{ background: T.paper, border: `1px solid ${T.line}`, width: 220 }}>
+          <Search size={15} color={T.faint} />
+          <input placeholder="Search…" className="bg-transparent outline-none w-full"
+            style={{ fontSize: 12.5, color: T.text }} />
+        </div>
+        <button className="rounded-lg p-2 relative focus:outline-none"
+          style={{ border: `1px solid ${T.line}`, background: T.surface }}>
+          <Bell size={16} color={T.muted} />
+          <span style={{ position: "absolute", top: 6, right: 6, width: 6, height: 6,
+            borderRadius: 999, background: T.gold }} /></button>
+        <button className="rounded-full focus:outline-none transition-opacity hover:opacity-90"
+          style={{ width: 38, height: 38, background: T.ink, display: "grid", placeItems: "center" }}>
+          <Plus size={18} color="#fff" /></button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Dashboard — cloned layout from reference 44
+--------------------------------------------------------------------------- */
+function StatCard({ label, value, cur, sub, action, onAction, accent }) {
+  return (
+    <div className="rounded-2xl p-4 sm:p-5" style={{ background: T.surface,
+      border: `1px solid ${T.line}` }}>
+      <div className="flex items-start justify-between">
+        <Eyebrow>{label}</Eyebrow>
+        {action ? (
+          <button onClick={onAction}
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1 focus:outline-none transition-colors"
+            style={{ border: `1px solid ${T.line}`, fontSize: 11.5, color: T.teal, fontWeight: 600 }}>
+            {action}</button>
+        ) : (
+          <ArrowUpRight size={16} color={T.faint} />
+        )}
+      </div>
+      <div className="flex items-end gap-1.5 mt-3">
+        <div style={{ ...num, fontSize: "clamp(21px, 4.6vw, 27px)", fontWeight: 650,
+          color: accent || T.text, letterSpacing: "-0.02em", lineHeight: 1 }}>{value}</div>
+        {cur && <span style={{ fontFamily: mono, fontSize: 11.5, color: T.faint,
+          marginBottom: 2 }}>{cur}</span>}
+      </div>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>{sub}</div>
+    </div>
+  );
+}
+
+function BreakdownList({ title, rows, variant, onMore }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center justify-between mb-4">
+        <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>{title}</div>
+        <button onClick={onMore} style={{ fontSize: 11.5, color: T.teal, fontWeight: 600 }}
+          className="focus:outline-none">See all</button>
+      </div>
+      <div className="flex flex-col">
+        {rows.map((r, i) => (
+          <div key={r.name} className="flex items-center gap-3 py-2.5"
+            style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+            {variant === "avatar" ? (
+              <div style={{ width: 32, height: 32, borderRadius: 999, background: T.tealSoft,
+                color: T.teal, display: "grid", placeItems: "center", fontFamily: mono,
+                fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{r.ini}</div>
+            ) : (
+              <div style={{ width: 32, height: 32, borderRadius: 9, background: `${r.color}1A`,
+                display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: r.color }} />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: 13, fontWeight: 550, color: T.text, overflow: "hidden",
+                textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+              <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                {r.n} {variant === "tax" ? "lines" : "bills"}
+                {variant === "tax" && (r.claim
+                  ? <span style={{ color: T.claim }}> · claimable</span>
+                  : <span style={{ color: T.exempt }}> · not claimable</span>)}
+              </div>
+            </div>
+            <div style={{ ...num, fontSize: 12.5, fontWeight: 600, color: T.text,
+              whiteSpace: "nowrap" }}>{fmt0(r.amt)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DropPill({ children }) {
+  return (
+    <button className="flex items-center gap-1.5 rounded-lg px-3 py-2 focus:outline-none"
+      style={{ border: `1px solid ${T.line}`, background: T.surface, fontSize: 12.5,
+        color: T.text, fontWeight: 500 }}>
+      {children} <ChevronDown size={14} color={T.faint} />
+    </button>
+  );
+}
+
+function Dashboard({ onNav }) {
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      {/* stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <StatCard label="Accounts payable" value="45,230.00" cur="MVR"
+          sub="6 bills pending" action="Review" onAction={() => onNav("bills")} />
+        <StatCard label="Awaiting approval" value="3" sub="2 AI-verified · 1 draft"
+          accent={T.teal} />
+        <StatCard label="Claimable input tax" value="8,107.00" cur="MVR"
+          sub="toward MIRA 205" accent={T.claim} />
+        <StatCard label="Inventory value" value="312,400" cur="MVR"
+          sub="weighted average cost" />
+      </div>
+
+      {/* overview band */}
+      <div className="flex items-center justify-between mt-7 mb-4 flex-wrap gap-3">
+        <div style={{ fontSize: 17, fontWeight: 680, color: T.text }}>Overview</div>
+        <div className="flex items-center gap-2">
+          <DropPill>All vendors</DropPill>
+          <DropPill>This month</DropPill>
+        </div>
+      </div>
+
+      {/* chart + right rail */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: T.surface,
+        border: `1px solid ${T.line}` }}>
+        <div className="grid grid-cols-1 lg:grid-cols-3">
+          <div className="lg:col-span-2 p-4 sm:p-6" style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text, marginBottom: 14 }}>
+              Purchase spending trend</div>
+            <ResponsiveContainer width="100%" height={252}>
+              <AreaChart data={TREND} margin={{ left: -14, right: 6, top: 4 }}>
+                <defs>
+                  <linearGradient id="fillTeal" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={T.teal} stopOpacity={0.22} />
+                    <stop offset="100%" stopColor={T.teal} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke={T.line2} />
+                <XAxis dataKey="m" tick={{ fontSize: 10.5, fill: T.faint }}
+                  axisLine={false} tickLine={false} interval={0} />
+                <YAxis tick={{ fontSize: 10, fill: T.faint, fontFamily: mono }} axisLine={false}
+                  tickLine={false} width={40} tickFormatter={(v) => `${v / 1000}k`} />
+                <Tooltip cursor={{ stroke: T.teal, strokeWidth: 1, strokeDasharray: "3 3" }}
+                  contentStyle={{ borderRadius: 10, border: `1px solid ${T.line}`,
+                    fontFamily: mono, fontSize: 12 }}
+                  formatter={(v) => [fmt0(v), "Spend"]} />
+                <Area type="monotone" dataKey="val" stroke={T.teal} strokeWidth={2.5}
+                  fill="url(#fillTeal)" dot={false}
+                  activeDot={{ r: 5, fill: T.teal, stroke: "#fff", strokeWidth: 2 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="p-5 sm:p-6 flex flex-col gap-5"
+            style={{ borderLeft: `1px solid ${T.line}` }}>
+            <div>
+              <Eyebrow>Total spend</Eyebrow>
+              <div style={{ ...num, fontSize: 24, fontWeight: 680, color: T.text,
+                marginTop: 6, letterSpacing: "-0.02em" }}>Rf 213,790</div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>
+                1–31 Jul 2026 · 26 bills</div>
+              <div className="flex items-center gap-1 mt-2" style={{ ...num, fontSize: 11.5,
+                color: T.exempt, fontWeight: 600 }}>
+                <TrendingUp size={13} /> +15% vs June</div>
+            </div>
+            <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 18 }}>
+              <Eyebrow>Largest bill</Eyebrow>
+              <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.text, marginTop: 6 }}>
+                Rf 98,280</div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>
+                Altura Pvt Ltd · 05 Jul</div>
+              <button onClick={() => onNav("approval")}
+                className="flex items-center gap-1.5 mt-3 focus:outline-none"
+                style={{ fontSize: 12, color: T.teal, fontWeight: 600 }}>
+                Open in approval queue <ArrowRight size={13} /></button>
+            </div>
+          </div>
+        </div>
+
+        {/* three breakdown columns */}
+        <div className="grid grid-cols-1 md:grid-cols-3" style={{ borderTop: `1px solid ${T.line}` }}>
+          <div className="p-5 sm:p-6" style={{ borderBottom: `1px solid ${T.line}` }}>
+            <BreakdownList title="Spend by category" rows={BY_CATEGORY} variant="cat"
+              onMore={() => onNav("reports")} />
+          </div>
+          <div className="p-5 sm:p-6"
+            style={{ borderBottom: `1px solid ${T.line}` }}>
+            <div className="md:border-l md:border-r md:px-6 md:-mx-6 md:h-full"
+              style={{ borderColor: T.line }}>
+              <BreakdownList title="Spend by vendor" rows={BY_VENDOR} variant="avatar"
+                onMore={() => onNav("vendors")} />
+            </div>
+          </div>
+          <div className="p-5 sm:p-6">
+            <BreakdownList title="Spend by tax class" rows={BY_TAX} variant="tax"
+              onMore={() => onNav("filing")} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Approval (tabbed on mobile, split on desktop)
+--------------------------------------------------------------------------- */
+function InvoiceReplica({ b, pad }) {
+  return (
+    <div className="mx-auto" style={{ background: "#fff", width: "100%", maxWidth: 460,
+      border: `1px solid ${T.line}`, borderRadius: 6, boxShadow: "0 1px 3px rgba(11,42,46,0.06)",
+      padding: pad }}>
+      <div className="flex justify-between items-start" style={{ marginBottom: 20 }}>
+        <div className="pr-3">
+          <div style={{ fontWeight: 700, fontSize: 14.5, color: T.text }}>{b.vendor}</div>
+          <div style={{ fontSize: 9.5, color: T.muted, lineHeight: 1.5, marginTop: 3 }}>
+            Company ID : C05262022 · Tax ID : {b.tin}<br />6F, G. Velimaa, Majeedhee Magu, Male'</div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: "0.12em", color: T.faint,
+            textTransform: "uppercase" }}>Tax Invoice</div>
+          <div style={{ fontFamily: mono, fontSize: 11.5, color: T.text, marginTop: 3 }}>{b.invoice}</div>
+        </div>
+      </div>
+      <div style={{ borderTop: `1px solid ${T.line}`, borderBottom: `1px solid ${T.line}`,
+        padding: "10px 0", marginBottom: 14, display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <div className="min-w-0">
+          <div style={{ fontSize: 8.5, color: T.faint, textTransform: "uppercase",
+            letterSpacing: "0.1em", fontFamily: mono }}>Bill to</div>
+          <div style={{ fontSize: 10.5, color: T.text, marginTop: 3, fontWeight: 550 }}>
+            Road Development Corporation Ltd</div>
+          <div style={{ fontSize: 9, color: T.muted, fontFamily: mono }}>TIN 1110219GST501</div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: 9, color: T.muted, fontFamily: mono,
+          whiteSpace: "nowrap" }}><div>Date : {b.date}</div><div>P.O.# : {b.po}</div></div>
+      </div>
+      <table style={{ width: "100%", fontSize: 10.5, color: T.text }}>
+        <thead><tr style={{ color: T.faint, fontFamily: mono, fontSize: 8.5,
+          textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <td style={{ paddingBottom: 6 }}>Item &amp; Description</td>
+          <td style={{ textAlign: "right", paddingBottom: 6 }}>Qty</td>
+          <td style={{ textAlign: "right", paddingBottom: 6 }}>Amount</td></tr></thead>
+        <tbody><tr style={{ borderTop: `1px solid ${T.line}` }}>
+          <td style={{ padding: "9px 0" }}>{b.line}</td>
+          <td style={{ textAlign: "right", ...num }}>{b.qty.toFixed(2)}</td>
+          <td style={{ textAlign: "right", ...num }}>
+            {b.subtotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td></tr></tbody>
+      </table>
+      <div style={{ marginTop: 12, marginLeft: "auto", width: 190, fontSize: 10.5 }}>
+        {[["Sub Total", b.subtotal], [`GST (${b.rate}%)`, b.gst]].map(([k, v]) => (
+          <div key={k} className="flex justify-between" style={{ padding: "3px 0", color: T.muted }}>
+            <span>{k}</span><span style={num}>{v.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span></div>
+        ))}
+        <div className="flex justify-between" style={{ padding: "7px 0", marginTop: 4,
+          borderTop: `1.5px solid ${T.ink}`, fontWeight: 700, color: T.text }}>
+          <span>Total MVR</span>
+          <span style={num}>{b.total.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span></div>
+      </div>
+    </div>
+  );
+}
+
+function ExtractedField({ label, value, confidence }) {
+  return (
+    <div className="min-w-0">
+      <Eyebrow>{label}</Eyebrow>
+      <div className="flex items-center gap-2 mt-1.5">
+        <div style={{ fontSize: 13.5, color: T.text, fontWeight: 550, overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+        {confidence && <span style={{ width: 6, height: 6, borderRadius: 999, flexShrink: 0,
+          background: confidence > 0.9 ? T.claim : T.warn }} />}
+      </div>
+    </div>
+  );
+}
+
+function DataPanel({ b, approved, setApproved }) {
+  const recomputed = +(b.subtotal * b.rate / 100).toFixed(2);
+  const verified = Math.abs(recomputed - b.gst) < 0.01;
+  return (
+    <>
+      <div className="flex items-center justify-between mb-5">
+        <Eyebrow>Extracted data</Eyebrow>
+        <span className="flex items-center gap-1.5" style={{ fontFamily: mono, fontSize: 10.5,
+          color: T.teal }}><Sparkles size={12} /> Claude · 94% confidence</span>
+      </div>
+      <div className="grid grid-cols-2 gap-y-4 gap-x-4 sm:gap-x-6 mb-6">
+        <ExtractedField label="Vendor" value={b.vendor} confidence={0.96} />
+        <ExtractedField label="Vendor TIN" value={b.tin} confidence={0.91} />
+        <ExtractedField label="Invoice no." value={b.invoice} confidence={0.98} />
+        <ExtractedField label="PO number" value={b.po} confidence={0.88} />
+        <ExtractedField label="Invoice date" value={b.date} confidence={0.95} />
+        <ExtractedField label="Currency" value={b.cur} confidence={0.99} />
+      </div>
+      <Eyebrow style={{ marginBottom: 8 }}>Line items · MIRA classification</Eyebrow>
+      <div className="rounded-lg mb-5" style={{ border: `1px solid ${T.line}` }}>
+        <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3">
+          <div className="flex-1 min-w-0">
+            <div style={{ fontSize: 12.5, color: T.text, fontWeight: 550 }}>{b.line}</div>
+            <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginTop: 2 }}>
+              {b.qty} × {fmt(b.unit)}</div>
+          </div>
+          <TaxChip c={b.taxCat} />
+          <div style={{ ...num, fontSize: 12.5, color: T.text, fontWeight: 600, textAlign: "right",
+            whiteSpace: "nowrap" }}>{fmt(b.subtotal).replace("Rf ", "")}</div>
+        </div>
+      </div>
+      <div className="rounded-lg p-4 mb-5 flex items-start gap-3"
+        style={{ background: verified ? T.claimSoft : T.exemptSoft,
+          border: `1px solid ${verified ? "#BFE0D2" : "#E8C9C2"}` }}>
+        <ShieldCheck size={20} color={verified ? T.claim : T.exempt}
+          style={{ marginTop: 1, flexShrink: 0 }} />
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: 12.5, fontWeight: 650, color: verified ? T.claim : T.exempt }}>
+            {verified ? "Tax verified" : "Tax mismatch — review"}</div>
+          <div style={{ fontFamily: mono, fontSize: 10.5, color: T.muted, marginTop: 3,
+            wordBreak: "break-word" }}>
+            {b.rate}% × {b.subtotal.toLocaleString("en-US")} = {recomputed.toLocaleString("en-US",
+              { minimumFractionDigits: 2 })} · matches invoice</div>
+          {b.taxCat === "EXEMPT" && <div style={{ fontSize: 11, color: T.exempt, marginTop: 4 }}>
+            Section 20 exempt — input tax <b>cannot</b> be claimed.</div>}
+        </div>
+      </div>
+      <div className="rounded-lg p-4 mb-6" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        {[["Subtotal", b.subtotal], [`GST (${b.rate}%)`, b.gst]].map(([k, v]) => (
+          <div key={k} className="flex justify-between py-1" style={{ fontSize: 12.5, color: T.muted }}>
+            <span>{k}</span><span style={num}>{fmt(v)}</span></div>
+        ))}
+        <div className="flex justify-between pt-3 mt-2"
+          style={{ borderTop: `1px solid ${T.line}`, fontWeight: 700, color: T.text }}>
+          <span style={{ fontSize: 13 }}>Total payable</span>
+          <span style={{ ...num, fontSize: 15 }}>{fmt(b.total)}</span></div>
+      </div>
+      {approved ? (
+        <div className="rounded-lg p-4 flex items-center gap-3"
+          style={{ background: T.goldSoft, border: `1px solid #E7D3A6` }}>
+          <div style={{ width: 30, height: 30, borderRadius: 999, background: T.gold,
+            display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <Check size={17} color={T.ink} strokeWidth={3} /></div>
+          <div><div style={{ fontSize: 13, fontWeight: 650, color: T.warn }}>
+            Approved &amp; queued for sync</div>
+            <div style={{ fontFamily: mono, fontSize: 10.5, color: T.muted }}>
+              ACCOUNTANT_APPROVED → pushing to Zoho Books</div></div>
+        </div>
+      ) : (
+        <div className="flex gap-3">
+          <button className="rounded-lg px-4 flex items-center gap-2 focus:outline-none"
+            style={{ border: `1px solid ${T.line}`, background: T.surface, color: T.muted,
+              fontSize: 13, fontWeight: 550, minHeight: 46 }}><X size={16} /> Reject</button>
+          <button onClick={() => setApproved(true)}
+            className="flex-1 rounded-lg px-4 flex items-center justify-center gap-2 transition-opacity hover:opacity-90 focus:outline-none"
+            style={{ background: T.claim, color: "#fff", fontSize: 13, fontWeight: 600, minHeight: 46 }}>
+            <Check size={17} strokeWidth={2.5} /> Approve &amp; sync</button>
+        </div>
+      )}
+      <div className="flex items-center justify-center gap-1.5 sm:gap-2 mt-4 flex-wrap"
+        style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>
+        <span>DRAFT</span><ChevronRight size={11} />
+        <span style={{ color: T.teal }}>AI_VERIFIED</span><ChevronRight size={11} />
+        <span style={{ color: approved ? T.claim : T.faint }}>APPROVED</span><ChevronRight size={11} />
+        <span style={{ color: approved ? T.warn : T.faint }}>SYNCED</span>
+      </div>
+    </>
+  );
+}
+
+function Approval() {
+  const w = useW(); const desktop = w >= 1024;
+  const queue = BILLS.filter((b) => b.status === "DRAFT" || b.status === "AI_VERIFIED");
+  const [sel, setSel] = useState(queue[0].id);
+  const [tab, setTab] = useState("data");
+  const [approved, setApproved] = useState(false);
+  const b = BILLS.find((x) => x.id === sel);
+  useEffect(() => setApproved(false), [sel]);
+  return (
+    <div style={{ background: T.paper }}>
+      <div className="flex gap-2 px-4 sm:px-8 py-3 sm:py-4 overflow-x-auto"
+        style={{ borderBottom: `1px solid ${T.line}`, background: T.surface }}>
+        {queue.map((q) => {
+          const on = q.id === sel;
+          return (
+            <button key={q.id} onClick={() => setSel(q.id)}
+              className="rounded-lg px-3.5 py-2.5 text-left shrink-0 transition-colors focus:outline-none"
+              style={{ border: `1px solid ${on ? T.teal : T.line}`,
+                background: on ? T.tealSofter : T.surface, minWidth: 168 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.text, overflow: "hidden",
+                textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.vendor}</div>
+              <div className="flex items-center justify-between mt-1.5 gap-2">
+                <span style={{ ...num, fontSize: 11, color: T.muted }}>{fmt(q.total)}</span>
+                <StatusPill s={q.status} />
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {desktop ? (
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", minHeight: 620 }}>
+          <div className="p-8" style={{ borderRight: `1px solid ${T.line}` }}>
+            <div className="flex items-center justify-between mb-4">
+              <Eyebrow>Source document</Eyebrow>
+              <span className="flex items-center gap-1.5" style={{ fontFamily: mono, fontSize: 11,
+                color: T.muted }}><FileText size={13} /> {b.invoice}.pdf</span>
+            </div>
+            <InvoiceReplica b={b} pad={30} />
+          </div>
+          <div className="p-8 flex flex-col">
+            <DataPanel b={b} approved={approved} setApproved={setApproved} />
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 sm:p-6" style={{ paddingBottom: 88 }}>
+          <div className="flex p-1 rounded-lg mb-5" style={{ background: T.line2, gap: 4 }}>
+            {[["data", "Extracted data"], ["doc", "Source document"]].map(([id, lab]) => {
+              const on = tab === id;
+              return (
+                <button key={id} onClick={() => setTab(id)}
+                  className="flex-1 rounded-md focus:outline-none transition-colors"
+                  style={{ background: on ? T.surface : "transparent", color: on ? T.text : T.muted,
+                    fontSize: 12.5, fontWeight: on ? 650 : 500, minHeight: 38,
+                    boxShadow: on ? "0 1px 2px rgba(11,42,46,0.08)" : "none" }}>{lab}</button>
+              );
+            })}
+          </div>
+          {tab === "doc" ? (
+            <div>
+              <div className="flex items-center gap-1.5 mb-3" style={{ fontFamily: mono,
+                fontSize: 11, color: T.muted }}><FileText size={13} /> {b.invoice}.pdf</div>
+              <InvoiceReplica b={b} pad={20} />
+            </div>
+          ) : <DataPanel b={b} approved={approved} setApproved={setApproved} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Bills — table (md+) / cards (mobile)
+--------------------------------------------------------------------------- */
+const AGE = { current: ["Current", T.claim], "1_30": ["1–30 days", T.warn],
+  "90_plus": ["90+ days", T.exempt] };
+
+function Bills() {
+  const w = useW(); const wide = w >= 768;
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`,
+        background: T.surface }}>
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 gap-3"
+          style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div className="min-w-0">
+            <Eyebrow>Accounts payable</Eyebrow>
+            <div style={{ fontSize: 15, fontWeight: 620, color: T.text, marginTop: 2 }}>
+              All bills &amp; expenses</div>
+          </div>
+          <button className="flex items-center gap-2 rounded-lg px-3 sm:px-3.5 focus:outline-none shrink-0"
+            style={{ border: `1px solid ${T.line}`, fontSize: 12.5, color: T.muted, minHeight: 40 }}>
+            <Download size={14} /> <span className="hidden sm:inline">Export for MIRA 205</span>
+            <span className="sm:hidden">Export</span>
+          </button>
+        </div>
+        {wide ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: T.paper }}>
+              {["Vendor", "Invoice", "Date", "Tax", "Aging", "Status", "Total"].map((h, i) => (
+                <th key={h} style={{ textAlign: i > 5 ? "right" : "left", padding: "11px 16px",
+                  fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+                  color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+              ))}</tr></thead>
+            <tbody>
+              {BILLS.map((b) => (
+                <tr key={b.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+                  <td style={{ padding: "13px 16px" }}>
+                    <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>{b.vendor}</div>
+                    <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>{b.cat}</div></td>
+                  <td style={{ padding: "13px 16px", fontFamily: mono, fontSize: 12, color: T.muted }}>
+                    {b.invoice}</td>
+                  <td style={{ padding: "13px 16px", fontSize: 12.5, color: T.muted }}>{b.date}</td>
+                  <td style={{ padding: "13px 16px" }}><TaxChip c={b.taxCat} /></td>
+                  <td style={{ padding: "13px 16px" }}>
+                    <span style={{ fontSize: 11.5, color: AGE[b.aging][1], fontWeight: 600 }}>
+                      {AGE[b.aging][0]}</span></td>
+                  <td style={{ padding: "13px 16px" }}><StatusPill s={b.status} /></td>
+                  <td style={{ padding: "13px 16px", textAlign: "right", ...num, fontSize: 13,
+                    fontWeight: 600, color: T.text }}>{fmt(b.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div>
+            {BILLS.map((b, i) => (
+              <div key={b.id} className="px-4 py-3.5"
+                style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: T.text }}>{b.vendor}</div>
+                    <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginTop: 1 }}>
+                      {b.invoice} · {b.cat}</div></div>
+                  <div style={{ ...num, fontSize: 14, fontWeight: 700, color: T.text,
+                    whiteSpace: "nowrap" }}>{fmt(b.total)}</div>
+                </div>
+                <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                  <TaxChip c={b.taxCat} /><StatusPill s={b.status} />
+                  <span style={{ fontSize: 11, color: AGE[b.aging][1], fontWeight: 600 }}>
+                    · {AGE[b.aging][0]}</span>
+                  <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint,
+                    marginLeft: "auto" }}>due {b.due}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Placeholder
+--------------------------------------------------------------------------- */
+const PLACE = {
+  inventory: [Package, "Perpetual inventory",
+    ["Real-time stock from incoming purchase bills",
+     "Weighted average cost valuation, synced to COGS on POS sales",
+     "SKU management and low-stock reorder alerts"]],
+  banking: [Landmark, "Banking & reconciliation",
+    ["Import BML statements (CSV / PDF), deduplicated on re-import",
+     "Auto-match bank lines to payments — exact, fuzzy, then rules",
+     "Bulk-confirm suggested matches in one review pass"]],
+  filing: [CalendarClock, "Tax filing calendar",
+    ["MIRA 205 (GGST) & 206 (TGST) reminders on your taxable period",
+     "Income tax obligations across interim and final returns",
+     "One-click export packs to prepare each filing"]],
+  vendors: [Users, "Vendors",
+    ["Vendor directory with TIN and bank-alias matching",
+     "Spend history and payables per vendor",
+     "Bank-statement name aliases for reconciliation"]],
+  reports: [BarChart3, "Reports",
+    ["Financial health scorecards and KPI trends",
+     "Spend, AP aging, inventory turnover, cash runway",
+     "Industry benchmarks by MIRA industry code"]],
+  txns: [ReceiptText, "All transactions",
+    ["Unified log of bills, expenses and POS sales",
+     "Filter by vendor, category, tax class and status",
+     "Drill into any journal or sync record"]],
+  settings: [Settings, "Settings",
+    ["Organization profile, sector and GST registration",
+     "Roles & access (Owner, Manager, Accountant)",
+     "Connected accounting software and API keys"]],
+};
+
+function Placeholder({ id }) {
+  const [Icon, title, points] = PLACE[id] || [FileText, "Coming soon", []];
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="rounded-2xl p-6 sm:p-10 max-w-2xl" style={{ background: T.surface,
+        border: `1px dashed ${T.line}` }}>
+        <div style={{ width: 44, height: 44, borderRadius: 11, background: T.tealSoft,
+          display: "grid", placeItems: "center", marginBottom: 16 }}>
+          <Icon size={22} color={T.teal} /></div>
+        <div style={{ fontSize: 17, fontWeight: 660, color: T.text }}>{title}</div>
+        <div style={{ fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
+          Wired into the schema and ready to build next. This module will cover:</div>
+        <div className="mt-4 flex flex-col gap-2.5">
+          {points.map((p) => (
+            <div key={p} className="flex items-start gap-2.5">
+              <ArrowUpRight size={15} color={T.gold} style={{ marginTop: 2, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, color: T.text }}>{p}</span></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   App shell
+--------------------------------------------------------------------------- */
+const TITLES = {
+  dashboard: "Spend Overview", approval: "Approval queue", bills: "Bills & expenses",
+  inventory: "Inventory", banking: "Banking", filing: "Tax filing", vendors: "Vendors",
+  reports: "Reports", txns: "All transactions", settings: "Settings",
+};
+
+export default function App() {
+  const [active, setActive] = useState("dashboard");
+  const title = TITLES[active] || "Kashikeyo";
+  const isCore = ["dashboard", "approval", "bills"].includes(active);
+
+  return (
+    <div style={{ fontFamily: sans, color: T.text, minHeight: "100vh", display: "flex",
+      background: T.paper }}>
+      <style>{`
+        @media (prefers-reduced-motion: reduce){ *{transition:none!important;animation:none!important} }
+        button:focus-visible{ outline:2px solid ${T.gold}; outline-offset:2px; }
+        ::-webkit-scrollbar{height:8px;width:8px}
+        ::-webkit-scrollbar-thumb{background:${T.line};border-radius:8px}
+        input::placeholder{color:${T.faint}}
+      `}</style>
+      <Sidebar active={active} onNav={setActive} />
+      <main className="flex-1 min-w-0 flex flex-col">
+        <MobileHeader title={title} />
+        <Topbar title={title} />
+        <div className="flex-1" style={{ paddingBottom: 64 }}>
+          {active === "dashboard" && <Dashboard onNav={setActive} />}
+          {active === "approval" && <Approval />}
+          {active === "bills" && <Bills />}
+          {!isCore && <Placeholder id={active} />}
+        </div>
+      </main>
+      <BottomNav active={active} onNav={setActive} />
+    </div>
+  );
+}
