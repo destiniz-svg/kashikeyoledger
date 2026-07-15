@@ -9,6 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
+import { getDashboard, API_BASE } from "./api.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -465,9 +466,69 @@ function DropPill({ children }) {
   );
 }
 
+/* ---- Live ledger strip — real data from the API, with graceful fallback --- */
+function LiveLedgerStrip() {
+  const [state, setState] = useState({ status: "loading", data: null });
+  useEffect(() => {
+    let alive = true;
+    getDashboard()
+      .then((d) => alive && setState({ status: "live", data: d }))
+      .catch(() => alive && setState({ status: "offline", data: null }));
+    return () => { alive = false; };
+  }, []);
+
+  if (state.status === "loading") {
+    return (
+      <div className="rounded-2xl p-4 mb-4" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        <span style={{ fontSize: 12.5, color: T.muted }}>Connecting to your ledger…</span>
+      </div>
+    );
+  }
+  if (state.status === "offline") {
+    return (
+      <div className="rounded-2xl p-4 mb-4 flex items-center gap-2.5 flex-wrap"
+        style={{ background: T.warnSoft, border: "1px solid #E7D3A6" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: T.warn, flexShrink: 0 }} />
+        <span style={{ fontSize: 12.5, color: T.warn, fontWeight: 550 }}>
+          Live ledger offline — showing sample data below.</span>
+        <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginLeft: "auto" }}>{API_BASE}</span>
+      </div>
+    );
+  }
+  const d = state.data;
+  const tiles = [
+    ["Accounts payable", fmt(d.accountsPayable)],
+    ["Cash & bank", fmt(d.cashAndBank)],
+    ["Expenses", fmt(d.expenses)],
+    ["Revenue (MTD)", fmt(d.revenueThisMonth.grandTotal)],
+    ["Out of balance", fmt(d.outOfBalanceBy)],
+  ];
+  return (
+    <div className="rounded-2xl p-4 sm:p-5 mb-4" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+      <div className="flex items-center gap-2 mb-3.5">
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: T.claim,
+          boxShadow: `0 0 0 3px ${T.claimSoft}` }} />
+        <Eyebrow style={{ color: T.claim }}>Live from your ledger</Eyebrow>
+        <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginLeft: "auto" }}>
+          {d.revenueThisMonth.from} – {d.revenueThisMonth.to}</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+        {tiles.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <Eyebrow>{label}</Eyebrow>
+            <div style={{ ...num, fontSize: 17, fontWeight: 650, color: T.text, marginTop: 4,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ onNav }) {
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <LiveLedgerStrip />
       {/* stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard label="Accounts payable" value="45,230.00" cur="MVR"

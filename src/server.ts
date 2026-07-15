@@ -26,13 +26,29 @@ function readGuard(req: IncomingMessage, res: ServerResponse): boolean {
   return true;
 }
 
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "access-control-allow-headers": "authorization, x-api-key, content-type",
+  "access-control-max-age": "86400",
+};
+
 function send(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(payload),
+    ...CORS_HEADERS,
   });
   res.end(payload);
+}
+
+/** First and last calendar day (UTC) of the month containing `d`. */
+function monthRange(d: Date): { from: string; to: string } {
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth();
+  const iso = (dt: Date) => dt.toISOString().slice(0, 10);
+  return { from: iso(new Date(Date.UTC(y, m, 1))), to: iso(new Date(Date.UTC(y, m + 1, 0))) };
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -54,6 +70,12 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
 
   try {
+    // CORS preflight — respond before anything else.
+    if (method === "OPTIONS") {
+      res.writeHead(204, CORS_HEADERS);
+      return res.end();
+    }
+
     // Writes require a valid API key; reads are open.
     const isWrite = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
     if (isWrite) {
@@ -132,6 +154,32 @@ const server = createServer(async (req, res) => {
       if (!readGuard(req, res)) return;
       const rows = await store.trialBalance();
       return send(res, 200, { rows, outOfBalanceBy: await store.outOfBalanceBy() });
+    }
+
+    if (method === "GET" && path === "/dashboard") {
+      if (!readGuard(req, res)) return;
+      const tb = await store.trialBalance();
+      const sumBy = (types: string[]) =>
+        tb.filter((r) => types.includes(r.accountType)).reduce((s, r) => s + r.balance, 0);
+      // ASSET/BANK/EXPENSE/COGS are debit-normal (+balance); LIABILITY/TAX are
+      // credit-normal, so their "owed" amount is the negated net balance.
+      const { from, to } = monthRange(new Date());
+      const revenue = await store.revenue(from, to);
+      const spendByAccount = tb
+        .filter((r) => ["EXPENSE", "COGS"].includes(r.accountType) && r.balance !== 0)
+        .map((r) => ({ code: r.code, name: r.name, amount: r.balance }))
+        .sort((a, b) => b.amount - a.amount);
+      return send(res, 200, {
+        organization: store.org || null,
+        currency: "MVR",
+        accountsPayable: -sumBy(["LIABILITY"]),
+        taxPayable: -sumBy(["TAX"]),
+        cashAndBank: sumBy(["ASSET", "BANK"]),
+        expenses: sumBy(["EXPENSE", "COGS"]),
+        revenueThisMonth: revenue,
+        spendByAccount,
+        outOfBalanceBy: await store.outOfBalanceBy(),
+      });
     }
 
     if (method === "GET" && path === "/sales") {

@@ -58,6 +58,10 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /sales`         | List POS sales with their line items                          |
 | `POST /sales` 🔒     | Record a sale `{ date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }` |
 | `GET /revenue`       | Revenue totals for a period `?from=YYYY-MM-DD&to=YYYY-MM-DD`   |
+| `GET /dashboard`     | Aggregates for the web dashboard (AP, cash, expenses, tax, revenue MTD) |
+
+Responses include permissive CORS headers (`Access-Control-Allow-Origin: *`) so
+the browser frontend can call the API cross-origin.
 
 Example — post a balanced entry:
 
