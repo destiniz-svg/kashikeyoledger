@@ -525,3 +525,71 @@ as $$
 $$;
 
 grant execute on function public.org_tax_filings(uuid, text, text) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Editable settings (migration kashikeyo_ledger_update_org_settings_fn)
+-- ---------------------------------------------------------------------------
+
+-- Partial-update the organization profile from a jsonb patch: only keys present
+-- in the patch are changed. Enum/range validated. Currency is intentionally not
+-- editable here (changing base/reporting currency mid-books is unsafe).
+create or replace function public.update_org_settings(p_org uuid, p_patch jsonb)
+returns table(
+  name text, tin text, sector text, industry_code text,
+  base_currency text, reporting_currency text, timezone text,
+  gst_registered boolean, gst_filing_frequency text, fiscal_year_start_month int,
+  green_tax_enabled boolean, green_tax_rate_usd numeric
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sector text := p_patch->>'sector';
+  v_freq   text := p_patch->>'gstFilingFrequency';
+  v_fmonth int  := nullif(p_patch->>'fiscalYearStartMonth', '')::int;
+  v_green  numeric := nullif(p_patch->>'greenTaxRateUsd', '')::numeric;
+begin
+  if (p_patch ? 'name') and length(trim(coalesce(p_patch->>'name', ''))) = 0 then
+    raise exception 'organization name cannot be empty';
+  end if;
+  if (p_patch ? 'sector') and v_sector not in ('GENERAL', 'TOURISM') then
+    raise exception 'invalid sector %', v_sector;
+  end if;
+  if (p_patch ? 'gstFilingFrequency') and v_freq not in ('MONTHLY', 'QUARTERLY') then
+    raise exception 'invalid gst filing frequency %', v_freq;
+  end if;
+  if (p_patch ? 'fiscalYearStartMonth') and (v_fmonth is null or v_fmonth < 1 or v_fmonth > 12) then
+    raise exception 'fiscal year start month must be between 1 and 12';
+  end if;
+  if (p_patch ? 'greenTaxRateUsd') and (v_green is null or v_green < 0) then
+    raise exception 'green tax rate must be zero or more';
+  end if;
+
+  update organizations o set
+    name = case when p_patch ? 'name' then trim(p_patch->>'name') else o.name end,
+    tin = case when p_patch ? 'tin' then nullif(trim(p_patch->>'tin'), '') else o.tin end,
+    sector = case when p_patch ? 'sector' then v_sector::business_sector else o.sector end,
+    industry_code = case when p_patch ? 'industryCode' then nullif(trim(p_patch->>'industryCode'), '') else o.industry_code end,
+    timezone = case when p_patch ? 'timezone' then nullif(trim(p_patch->>'timezone'), '') else o.timezone end,
+    gst_registered = case when p_patch ? 'gstRegistered' then (p_patch->>'gstRegistered')::boolean else o.gst_registered end,
+    gst_filing_frequency = case when p_patch ? 'gstFilingFrequency' then v_freq else o.gst_filing_frequency end,
+    fiscal_year_start_month = case when p_patch ? 'fiscalYearStartMonth' then v_fmonth else o.fiscal_year_start_month end,
+    green_tax_enabled = case when p_patch ? 'greenTaxEnabled' then (p_patch->>'greenTaxEnabled')::boolean else o.green_tax_enabled end,
+    green_tax_rate_usd = case when p_patch ? 'greenTaxRateUsd' then v_green else o.green_tax_rate_usd end,
+    updated_at = now()
+  where o.id = p_org;
+
+  if not found then
+    raise exception 'organization % not found', p_org;
+  end if;
+
+  return query
+    select o.name, coalesce(o.tin, ''), o.sector::text, coalesce(o.industry_code, ''),
+           trim(o.base_currency), trim(o.reporting_currency), coalesce(o.timezone, ''),
+           o.gst_registered, o.gst_filing_frequency, o.fiscal_year_start_month,
+           o.green_tax_enabled, o.green_tax_rate_usd
+    from organizations o where o.id = p_org;
+end $$;
+
+grant execute on function public.update_org_settings(uuid, jsonb) to authenticated, service_role;

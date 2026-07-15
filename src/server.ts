@@ -147,6 +147,7 @@ const server = createServer(async (req, res) => {
           "GET /reports  [read]",
           "GET /transactions  [read]",
           "GET /settings  [read]",
+          "PATCH /settings { name?, tin?, sector?, timezone?, gstRegistered?, ... }  [write]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
           "POST /banking/import { bankAccountId, source?, lines: [...] }  [write]",
@@ -391,6 +392,29 @@ const server = createServer(async (req, res) => {
           moneyIn,
           moneyOut,
           net: round2(moneyIn - moneyOut),
+        },
+      });
+    }
+
+    if ((method === "PATCH" || method === "PUT") && path === "/settings") {
+      const body = (await readJson(req)) as Record<string, unknown>;
+      const settings = await store.updateOrgSettings(body);
+      return send(res, 200, {
+        profile: {
+          name: settings.name,
+          tin: settings.tin,
+          sector: settings.sector,
+          industryCode: settings.industryCode,
+          baseCurrency: settings.baseCurrency,
+          reportingCurrency: settings.reportingCurrency,
+          timezone: settings.timezone,
+        },
+        tax: {
+          gstRegistered: settings.gstRegistered,
+          gstFilingFrequency: settings.gstFilingFrequency,
+          fiscalYearStartMonth: settings.fiscalYearStartMonth,
+          greenTaxEnabled: settings.greenTaxEnabled,
+          greenTaxRateUsd: settings.greenTaxRateUsd,
         },
       });
     }

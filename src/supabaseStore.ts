@@ -16,6 +16,7 @@ import {
   formatBillDate,
   nameInitials,
   normalizeImportLines,
+  normalizeSettingsPatch,
   vendorInitials,
   type AccountRow,
   type BankAccountRow,
@@ -25,6 +26,7 @@ import {
   type ImportResult,
   type MemberRow,
   type OrgSettings,
+  type OrgSettingsPatch,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -623,6 +625,43 @@ export class SupabaseStore implements LedgerStore {
       green_tax_rate_usd: string | number | null;
     }[];
     const o = rows[0] ?? ({} as (typeof rows)[number]);
+    return {
+      name: o.name ?? "",
+      tin: o.tin ?? "",
+      sector: o.sector ?? "",
+      industryCode: o.industry_code ?? "",
+      baseCurrency: (o.base_currency ?? "").trim(),
+      reportingCurrency: (o.reporting_currency ?? "").trim(),
+      timezone: o.timezone ?? "",
+      gstRegistered: Boolean(o.gst_registered),
+      gstFilingFrequency: o.gst_filing_frequency ?? "",
+      fiscalYearStartMonth: Number(o.fiscal_year_start_month ?? 1),
+      greenTaxEnabled: Boolean(o.green_tax_enabled),
+      greenTaxRateUsd: Number(o.green_tax_rate_usd ?? 0),
+    };
+  }
+
+  async updateOrgSettings(patch: OrgSettingsPatch): Promise<OrgSettings> {
+    const clean = normalizeSettingsPatch(patch);
+    const rows = (await this.#request("/rest/v1/rpc/update_org_settings", {
+      method: "POST",
+      body: JSON.stringify({ p_org: this.org, p_patch: clean }),
+    })) as {
+      name: string;
+      tin: string | null;
+      sector: string | null;
+      industry_code: string | null;
+      base_currency: string | null;
+      reporting_currency: string | null;
+      timezone: string | null;
+      gst_registered: boolean | null;
+      gst_filing_frequency: string | null;
+      fiscal_year_start_month: number | null;
+      green_tax_enabled: boolean | null;
+      green_tax_rate_usd: string | number | null;
+    }[];
+    const o = rows[0];
+    if (!o) throw new StoreError("Organization not found", 404);
     return {
       name: o.name ?? "",
       tin: o.tin ?? "",

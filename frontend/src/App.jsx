@@ -4,12 +4,12 @@ import {
   CalendarClock, Search, Bell, ChevronRight, ChevronDown, TrendingUp,
   TrendingDown, Check, X, Sparkles, ShieldCheck, Wallet, ArrowUpRight,
   Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings as SettingsIcon,
-  Users, BarChart3, ArrowDownLeft, Link2, UploadCloud
+  Users, BarChart3, ArrowDownLeft, Link2, UploadCloud, Pencil
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, getSettings, getTransactions, confirmBankTxn, excludeBankTxn, unmatchBankTxn, importStatement, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, getSettings, getTransactions, confirmBankTxn, excludeBankTxn, unmatchBankTxn, importStatement, updateSettings, approveBill, rejectBill, API_BASE } from "./api.js";
 import { parseStatementCsv } from "./statement.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
@@ -2317,18 +2317,46 @@ const SettingsCard = ({ icon: Icon, title, children }) => (
     {children}
   </div>
 );
-const Field = ({ label, value, mono: isMono }) => (
-  <div className="flex items-baseline justify-between gap-3 py-2" style={{ borderTop: `1px solid ${T.line2}` }}>
-    <span style={{ fontSize: 12.5, color: T.muted }}>{label}</span>
-    <span style={{ fontSize: 12.5, fontWeight: 550, color: T.text, textAlign: "right",
-      ...(isMono ? { fontFamily: mono, fontSize: 11.5 } : {}) }}>{value || "—"}</span>
+const Field = ({ label, value, mono: isMono, children }) => (
+  <div className="flex items-center justify-between gap-3 py-2" style={{ borderTop: `1px solid ${T.line2}`, minHeight: 40 }}>
+    <span style={{ fontSize: 12.5, color: T.muted, flexShrink: 0 }}>{label}</span>
+    {children ?? (
+      <span style={{ fontSize: 12.5, fontWeight: 550, color: T.text, textAlign: "right",
+        ...(isMono ? { fontFamily: mono, fontSize: 11.5 } : {}) }}>{value || "—"}</span>
+    )}
   </div>
 );
+const editInput = { border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 10px", fontSize: 12.5,
+  color: T.text, background: T.surface, fontFamily: sans, width: 200, textAlign: "right" };
+const EditText = ({ v, on, ph, mono: m }) => (
+  <input value={v ?? ""} onChange={(e) => on(e.target.value)} placeholder={ph}
+    style={{ ...editInput, ...(m ? { fontFamily: mono, fontSize: 11.5 } : {}) }} />
+);
+const EditSelect = ({ v, on, options }) => (
+  <select value={v} onChange={(e) => on(e.target.value)} style={{ ...editInput }}>
+    {options.map(([val, lab]) => <option key={val} value={val}>{lab}</option>)}
+  </select>
+);
+const Toggle = ({ on: isOn, onChange }) => (
+  <button onClick={() => onChange(!isOn)} aria-pressed={isOn}
+    style={{ width: 40, height: 23, borderRadius: 999, border: "none", cursor: "pointer",
+      background: isOn ? T.claim : T.line, position: "relative", flexShrink: 0 }}>
+    <span style={{ position: "absolute", top: 2, left: isOn ? 19 : 2, width: 19, height: 19,
+      borderRadius: 999, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,.25)", transition: "left .15s" }} />
+  </button>
+);
+const SECTOR_OPTS = [["GENERAL", "General"], ["TOURISM", "Tourism"]];
+const FREQ_OPTS = [["MONTHLY", "Monthly"], ["QUARTERLY", "Quarterly"]];
+const MONTH_OPTS = MON_LONG.map((m, i) => [String(i + 1), m]);
 
-function Settings() {
+function Settings({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
   const [data, setData] = useState(SETTINGS_DEMO);
   const [live, setLive] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
   useEffect(() => {
     let alive = true;
     getSettings()
@@ -2337,6 +2365,50 @@ function Settings() {
     return () => { alive = false; };
   }, []);
   const { profile: p, tax: t, members } = data;
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+
+  function startEdit() {
+    setErr(null);
+    setDraft({
+      name: p.name, tin: p.tin, sector: p.sector || "GENERAL", industryCode: p.industryCode,
+      timezone: p.timezone, gstRegistered: t.gstRegistered,
+      gstFilingFrequency: t.gstFilingFrequency || "MONTHLY",
+      fiscalYearStartMonth: String(t.fiscalYearStartMonth || 1),
+      greenTaxEnabled: t.greenTaxEnabled, greenTaxRateUsd: t.greenTaxRateUsd,
+    });
+    setEditing(true);
+  }
+  async function save() {
+    if (busy) return;
+    if (live && !session) { onRequireLogin(); return; }
+    const patch = {
+      name: draft.name, tin: draft.tin, sector: draft.sector, industryCode: draft.industryCode,
+      timezone: draft.timezone, gstRegistered: draft.gstRegistered,
+      gstFilingFrequency: draft.gstFilingFrequency,
+      fiscalYearStartMonth: Number(draft.fiscalYearStartMonth),
+      greenTaxEnabled: draft.greenTaxEnabled, greenTaxRateUsd: Number(draft.greenTaxRateUsd),
+    };
+    setBusy(true); setErr(null);
+    try {
+      if (live) {
+        const res = await updateSettings(patch);
+        setData((d) => ({ ...d, profile: res.profile, tax: res.tax }));
+      } else {
+        // Offline: apply the patch locally so the preview reflects the edit.
+        setData((d) => ({
+          ...d,
+          profile: { ...d.profile, name: patch.name, tin: patch.tin, sector: patch.sector,
+            industryCode: patch.industryCode, timezone: patch.timezone },
+          tax: { gstRegistered: patch.gstRegistered, gstFilingFrequency: patch.gstFilingFrequency,
+            fiscalYearStartMonth: patch.fiscalYearStartMonth, greenTaxEnabled: patch.greenTaxEnabled,
+            greenTaxRateUsd: patch.greenTaxRateUsd },
+        }));
+      }
+      setEditing(false);
+    } catch {
+      setErr("Couldn't save — check the values, or sign in again.");
+    } finally { setBusy(false); }
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
@@ -2346,32 +2418,88 @@ function Settings() {
           fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
           {live ? "LIVE" : "SAMPLE"}</span>
+        <div className="flex items-center gap-2" style={{ marginLeft: "auto" }}>
+          {editing ? (
+            <>
+              <button onClick={() => { setEditing(false); setErr(null); }} disabled={busy}
+                style={{ border: `1px solid ${T.line}`, borderRadius: 9, padding: "7px 14px",
+                  fontSize: 12.5, fontWeight: 600, color: T.muted, background: T.surface, cursor: "pointer" }}>
+                Cancel</button>
+              <button onClick={save} disabled={busy}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.ink, color: "#fff",
+                  borderRadius: 9, padding: "7px 15px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                  opacity: busy ? 0.7 : 1 }}>
+                <Check size={14} /> {busy ? "Saving…" : "Save changes"}</button>
+            </>
+          ) : (
+            <button onClick={startEdit}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${T.line}`,
+                borderRadius: 9, padding: "7px 14px", fontSize: 12.5, fontWeight: 600, color: T.text,
+                background: T.surface, cursor: "pointer" }}>
+              <Pencil size={13} /> Edit</button>
+          )}
+        </div>
       </div>
+      {err && (
+        <div className="mb-4 rounded-lg px-4 py-2.5" style={{ background: T.exemptSoft, color: T.exempt,
+          fontSize: 12.5, fontWeight: 500 }}>{err}</div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Organization profile */}
         <SettingsCard icon={Landmark} title="Organization profile">
-          <div style={{ fontSize: 18, fontWeight: 700, color: T.text, marginBottom: 6 }}>{p.name || "—"}</div>
-          <Field label="Taxpayer TIN" value={p.tin} mono />
-          <Field label="Business sector" value={titleCase(p.sector)} />
-          <Field label="MIRA industry code" value={p.industryCode} mono />
+          {editing ? (
+            <div className="pb-1">
+              <Eyebrow>Legal name</Eyebrow>
+              <input value={draft.name ?? ""} onChange={(e) => set("name", e.target.value)}
+                style={{ ...editInput, width: "100%", textAlign: "left", marginTop: 4, fontSize: 15, fontWeight: 600 }} />
+            </div>
+          ) : (
+            <div style={{ fontSize: 18, fontWeight: 700, color: T.text, marginBottom: 6 }}>{p.name || "—"}</div>
+          )}
+          <Field label="Taxpayer TIN" value={p.tin} mono>
+            {editing && <EditText v={draft.tin} on={(v) => set("tin", v)} ph="e.g. 1234567" mono />}
+          </Field>
+          <Field label="Business sector" value={titleCase(p.sector)}>
+            {editing && <EditSelect v={draft.sector} on={(v) => set("sector", v)} options={SECTOR_OPTS} />}
+          </Field>
+          <Field label="MIRA industry code" value={p.industryCode} mono>
+            {editing && <EditText v={draft.industryCode} on={(v) => set("industryCode", v)} ph="e.g. 55101" mono />}
+          </Field>
           <Field label="Base currency" value={p.baseCurrency} mono />
           <Field label="Reporting currency" value={p.reportingCurrency} mono />
-          <Field label="Timezone" value={p.timezone} />
+          <Field label="Timezone" value={p.timezone}>
+            {editing && <EditText v={draft.timezone} on={(v) => set("timezone", v)} ph="Indian/Maldives" />}
+          </Field>
         </SettingsCard>
 
         {/* Tax registration */}
         <SettingsCard icon={ShieldCheck} title="Tax registration">
-          <div className="flex items-center gap-2 pb-3">
-            <span style={{ background: t.gstRegistered ? T.claimSoft : "#EEF1EF",
-              color: t.gstRegistered ? T.claim : T.muted, fontFamily: mono, fontSize: 11, fontWeight: 600,
-              padding: "3px 10px", borderRadius: 999 }}>
-              {t.gstRegistered ? "GST registered" : "Not GST registered"}</span>
-          </div>
-          <Field label="GGST filing frequency" value={titleCase(t.gstFilingFrequency)} />
-          <Field label="Fiscal year starts" value={MON_LONG[(t.fiscalYearStartMonth || 1) - 1]} />
-          <Field label="Green tax" value={t.greenTaxEnabled ? "Enabled" : "Not enabled"} />
-          <Field label="Green tax rate" value={`$${dec2(t.greenTaxRateUsd)} / night`} mono />
+          {editing ? (
+            <Field label="GST registered">
+              <Toggle on={draft.gstRegistered} onChange={(v) => set("gstRegistered", v)} />
+            </Field>
+          ) : (
+            <div className="flex items-center gap-2 pb-3">
+              <span style={{ background: t.gstRegistered ? T.claimSoft : "#EEF1EF",
+                color: t.gstRegistered ? T.claim : T.muted, fontFamily: mono, fontSize: 11, fontWeight: 600,
+                padding: "3px 10px", borderRadius: 999 }}>
+                {t.gstRegistered ? "GST registered" : "Not GST registered"}</span>
+            </div>
+          )}
+          <Field label="GGST filing frequency" value={titleCase(t.gstFilingFrequency)}>
+            {editing && <EditSelect v={draft.gstFilingFrequency} on={(v) => set("gstFilingFrequency", v)} options={FREQ_OPTS} />}
+          </Field>
+          <Field label="Fiscal year starts" value={MON_LONG[(t.fiscalYearStartMonth || 1) - 1]}>
+            {editing && <EditSelect v={draft.fiscalYearStartMonth} on={(v) => set("fiscalYearStartMonth", v)} options={MONTH_OPTS} />}
+          </Field>
+          <Field label="Green tax" value={t.greenTaxEnabled ? "Enabled" : "Not enabled"}>
+            {editing && <Toggle on={draft.greenTaxEnabled} onChange={(v) => set("greenTaxEnabled", v)} />}
+          </Field>
+          <Field label="Green tax rate" value={`$${dec2(t.greenTaxRateUsd)} / night`} mono>
+            {editing && <input type="number" min="0" step="0.5" value={draft.greenTaxRateUsd}
+              onChange={(e) => set("greenTaxRateUsd", e.target.value)} style={{ ...editInput, width: 120 }} />}
+          </Field>
         </SettingsCard>
 
         {/* Team members */}
@@ -2572,7 +2700,7 @@ export default function App() {
           {active === "reports" && <Reports />}
           {active === "inventory" && <Inventory />}
           {active === "banking" && <Banking session={session} onRequireLogin={() => setLoginOpen(true)} />}
-          {active === "settings" && <Settings />}
+          {active === "settings" && <Settings session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {active === "txns" && <Transactions />}
           {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "settings", "txns"].includes(active) && <Placeholder id={active} />}
         </div>

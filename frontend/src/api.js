@@ -54,6 +54,19 @@ export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
 export const getSettings = () => get("/settings");
 export const getTransactions = () => get("/transactions");
+
+async function patch(path, body) {
+  const token = getToken();
+  const headers = token
+    ? { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    : KEY
+      ? { "x-api-key": KEY, "content-type": "application/json" }
+      : { "content-type": "application/json" };
+  const res = await fetch(`${BASE}${path}`, { method: "PATCH", headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+export const updateSettings = (patchBody) => patch("/settings", patchBody);
 const bankAction = (id, action) => post(`/banking/${encodeURIComponent(id)}/${action}`);
 export const confirmBankTxn = (id, vendorId) =>
   post(`/banking/${encodeURIComponent(id)}/confirm`, vendorId ? { vendorId } : undefined);
