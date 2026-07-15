@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, approveBill, rejectBill, API_BASE } from "./api.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 
 /* ---------------------------------------------------------------------------
@@ -748,7 +748,7 @@ function ExtractedField({ label, value, confidence }) {
   );
 }
 
-function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
+function DataPanel({ b, onApprove, onReject, busy, error }) {
   const recomputed = +(b.subtotal * b.rate / 100).toFixed(2);
   const verified = Math.abs(recomputed - b.gst) < 0.01;
   return (
@@ -805,7 +805,7 @@ function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
           <span style={{ fontSize: 13 }}>Total payable</span>
           <span style={{ ...num, fontSize: 15 }}>{fmt(b.total)}</span></div>
       </div>
-      {approved ? (
+      {b.status === "ACCOUNTANT_APPROVED" ? (
         <div className="rounded-lg p-4 flex items-center gap-3"
           style={{ background: T.goldSoft, border: `1px solid #E7D3A6` }}>
           <div style={{ width: 30, height: 30, borderRadius: 999, background: T.gold,
@@ -815,6 +815,16 @@ function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
             Approved &amp; queued for sync</div>
             <div style={{ fontFamily: mono, fontSize: 10.5, color: T.muted }}>
               ACCOUNTANT_APPROVED → pushing to Zoho Books</div></div>
+        </div>
+      ) : b.status === "REJECTED" ? (
+        <div className="rounded-lg p-4 flex items-center gap-3"
+          style={{ background: T.exemptSoft, border: "1px solid #E8C9C2" }}>
+          <div style={{ width: 30, height: 30, borderRadius: 999, background: T.exempt,
+            display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <X size={17} color="#fff" strokeWidth={3} /></div>
+          <div><div style={{ fontSize: 13, fontWeight: 650, color: T.exempt }}>Rejected</div>
+            <div style={{ fontFamily: mono, fontSize: 10.5, color: T.muted }}>
+              REJECTED — removed from the approval queue</div></div>
         </div>
       ) : (
         <div>
@@ -839,8 +849,9 @@ function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
         style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>
         <span>DRAFT</span><ChevronRight size={11} />
         <span style={{ color: T.teal }}>AI_VERIFIED</span><ChevronRight size={11} />
-        <span style={{ color: approved ? T.claim : T.faint }}>APPROVED</span><ChevronRight size={11} />
-        <span style={{ color: approved ? T.warn : T.faint }}>SYNCED</span>
+        <span style={{ color: b.status === "ACCOUNTANT_APPROVED" ? T.claim : T.faint }}>APPROVED</span>
+        <ChevronRight size={11} />
+        <span style={{ color: T.faint }}>SYNCED</span>
       </div>
     </>
   );
@@ -852,49 +863,41 @@ function Approval({ session, onRequireLogin }) {
   const [live, setLive] = useState(false);
   const [sel, setSel] = useState(null);
   const [tab, setTab] = useState("data");
-  const [approvedIds, setApprovedIds] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    getBills()
-      .then((d) => { if (alive && Array.isArray(d) && d.length) { setBills(d); setLive(true); } })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  async function load() {
+    try {
+      const d = await getBills();
+      if (Array.isArray(d) && d.length) { setBills(d); setLive(true); }
+    } catch { /* keep current data */ }
+  }
+  useEffect(() => { load(); }, []);
 
   const queue = bills.filter((x) => x.status === "DRAFT" || x.status === "AI_VERIFIED");
-  const selId = queue.some((q) => q.id === sel) ? sel : (queue[0]?.id ?? null);
-  const b = bills.find((x) => x.id === selId);
-  const approved = b ? approvedIds.has(b.id) : false;
+  // Show the explicitly selected bill (even just-processed), else the first pending.
+  const b = bills.find((x) => x.id === sel) || queue[0];
 
-  async function doApprove() {
+  async function act(action) {
     if (!b || busy) return;
     if (live && !session) { onRequireLogin(); return; }
     setBusy(true); setErr(null);
+    setSel(b.id); // pin selection so the result shows on this bill
     try {
-      if (live) await approveBill(b.id); // only reflect success if the write lands
-      setApprovedIds((prev) => new Set(prev).add(b.id));
+      if (live) {
+        await (action === "approve" ? approveBill(b.id) : rejectBill(b.id));
+        await load(); // refetch true state from the DB
+      } else {
+        const status = action === "approve" ? "ACCOUNTANT_APPROVED" : "REJECTED";
+        setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status } : x)));
+      }
     } catch {
-      setErr("Approve failed — please sign in again.");
+      setErr(`${action === "approve" ? "Approve" : "Reject"} failed — please sign in again.`);
     } finally {
       setBusy(false);
     }
   }
-  async function doReject() {
-    if (!b || busy) return;
-    if (live && !session) { onRequireLogin(); return; }
-    setBusy(true); setErr(null);
-    try {
-      if (live) await rejectBill(b.id);
-      setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status: "REJECTED" } : x)));
-      setSel(null);
-    } catch {
-      setErr("Reject failed — please sign in again.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const doApprove = () => act("approve");
+  const doReject = () => act("reject");
 
   if (!b) {
     return (
@@ -911,6 +914,20 @@ function Approval({ session, onRequireLogin }) {
   }
   return (
     <div style={{ background: T.paper }}>
+      <div className="flex items-center gap-2 px-4 sm:px-8 pt-3"
+        style={{ background: T.surface }}>
+        <span style={{ width: 7, height: 7, borderRadius: 999, background: live ? T.claim : T.faint }} />
+        <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+          color: live ? T.claim : T.faint }}>{live ? "LIVE" : "SAMPLE"}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11.5, color: T.muted }}>
+          {session ? (
+            `Signed in as ${session.user?.email}`
+          ) : live ? (
+            <button onClick={onRequireLogin} className="focus:outline-none"
+              style={{ color: T.teal, fontWeight: 600 }}>Sign in to approve</button>
+          ) : "Sample data"}
+        </span>
+      </div>
       <div className="flex gap-2 px-4 sm:px-8 py-3 sm:py-4 overflow-x-auto"
         style={{ borderBottom: `1px solid ${T.line}`, background: T.surface }}>
         {queue.map((q) => {
@@ -941,7 +958,7 @@ function Approval({ session, onRequireLogin }) {
             <InvoiceReplica b={b} pad={30} />
           </div>
           <div className="p-8 flex flex-col">
-            <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />
+            <DataPanel b={b} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />
           </div>
         </div>
       ) : (
@@ -964,7 +981,7 @@ function Approval({ session, onRequireLogin }) {
                 fontSize: 11, color: T.muted }}><FileText size={13} /> {b.invoice}.pdf</div>
               <InvoiceReplica b={b} pad={20} />
             </div>
-          ) : <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />}
+          ) : <DataPanel b={b} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />}
         </div>
       )}
     </div>
@@ -1068,6 +1085,110 @@ function Bills() {
                   <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint,
                     marginLeft: "auto" }}>due {b.due}</span>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Vendors — directory with spend rollups
+--------------------------------------------------------------------------- */
+const VENDOR_DEMO = BY_VENDOR.map((v) => ({
+  id: v.name, name: v.name, ini: v.ini, tin: "—", gstRegistered: true,
+  currency: "MVR", billCount: v.n, totalSpend: v.amt, lastBillDate: "—",
+}));
+
+function Vendors() {
+  const w = useW(); const wide = w >= 768;
+  const [rows, setRows] = useState(VENDOR_DEMO);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getVendors()
+      .then((d) => { if (alive && Array.isArray(d) && d.length) { setRows(d); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const total = rows.reduce((s, v) => s + v.totalSpend, 0);
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`,
+        background: T.surface }}>
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 gap-3"
+          style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Eyebrow>Purchases</Eyebrow>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4,
+                fontFamily: mono, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em",
+                color: live ? T.claim : T.faint }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999,
+                  background: live ? T.claim : T.faint }} />{live ? "LIVE" : "SAMPLE"}</span>
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 620, color: T.text, marginTop: 2 }}>
+              {rows.length} vendors</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <Eyebrow>Total spend</Eyebrow>
+            <div style={{ ...num, fontSize: 15, fontWeight: 700, color: T.text, marginTop: 2 }}>
+              {fmt0(total)}</div>
+          </div>
+        </div>
+        {wide ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: T.paper }}>
+              {["Vendor", "GST", "Bills", "Last activity", "Total spend"].map((h, i) => (
+                <th key={h} style={{ textAlign: i > 3 ? "right" : "left", padding: "11px 16px",
+                  fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+                  color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+              ))}</tr></thead>
+            <tbody>
+              {rows.map((v) => (
+                <tr key={v.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+                  <td style={{ padding: "13px 16px" }}>
+                    <div className="flex items-center gap-3">
+                      <div style={{ width: 32, height: 32, borderRadius: 999, background: T.tealSoft,
+                        color: T.teal, display: "grid", placeItems: "center", fontFamily: mono,
+                        fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{v.ini}</div>
+                      <div className="min-w-0">
+                        <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>{v.name}</div>
+                        <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                          TIN {v.tin}</div></div>
+                    </div></td>
+                  <td style={{ padding: "13px 16px" }}>
+                    {v.gstRegistered
+                      ? <span style={{ background: T.tealSoft, color: T.teal, fontFamily: mono,
+                          fontSize: 11, padding: "3px 8px", borderRadius: 6, fontWeight: 600 }}>Registered</span>
+                      : <span style={{ fontSize: 11.5, color: T.faint }}>—</span>}</td>
+                  <td style={{ padding: "13px 16px", ...num, fontSize: 12.5, color: T.muted }}>
+                    {v.billCount}</td>
+                  <td style={{ padding: "13px 16px", fontSize: 12.5, color: T.muted }}>
+                    {v.lastBillDate}</td>
+                  <td style={{ padding: "13px 16px", textAlign: "right", ...num, fontSize: 13,
+                    fontWeight: 600, color: T.text }}>{fmt(v.totalSpend)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div>
+            {rows.map((v, i) => (
+              <div key={v.id} className="flex items-center gap-3 px-4 py-3.5"
+                style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                <div style={{ width: 34, height: 34, borderRadius: 999, background: T.tealSoft,
+                  color: T.teal, display: "grid", placeItems: "center", fontFamily: mono,
+                  fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{v.ini}</div>
+                <div className="flex-1 min-w-0">
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: T.text, overflow: "hidden",
+                    textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</div>
+                  <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                    {v.billCount} bills · {v.lastBillDate}</div></div>
+                <div style={{ ...num, fontSize: 14, fontWeight: 700, color: T.text,
+                  whiteSpace: "nowrap" }}>{fmt(v.totalSpend)}</div>
               </div>
             ))}
           </div>
@@ -1222,7 +1343,8 @@ export default function App() {
           {active === "dashboard" && <Dashboard onNav={setActive} />}
           {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {active === "bills" && <Bills />}
-          {!isCore && <Placeholder id={active} />}
+          {active === "vendors" && <Vendors />}
+          {!isCore && active !== "vendors" && <Placeholder id={active} />}
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} />

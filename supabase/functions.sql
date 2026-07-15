@@ -256,3 +256,32 @@ end;
 $$;
 
 grant execute on function public.set_transaction_status(uuid, uuid, text) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Vendors rollup (migration kashikeyo_ledger_org_vendors_fn)
+-- ---------------------------------------------------------------------------
+
+-- Per-vendor bill count, total spend, and last activity for an org.
+create or replace function public.org_vendors(p_org uuid)
+returns table(
+  id uuid, name text, tin text, gst_registered boolean, currency text,
+  bill_count bigint, total_spend numeric, last_bill_date date
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select v.id, v.name, v.tin, v.gst_registered, v.default_currency,
+         count(t.id)::bigint as bill_count,
+         coalesce(sum(t.grand_total), 0) as total_spend,
+         max(t.transaction_date) as last_bill_date
+  from vendors v
+  left join transactions t
+    on t.vendor_id = v.id and t.organization_id = p_org
+   and t.type in ('PURCHASE_BILL', 'EXPENSE')
+  where v.organization_id = p_org
+  group by v.id, v.name, v.tin, v.gst_registered, v.default_currency
+  order by coalesce(sum(t.grand_total), 0) desc;
+$$;
+
+grant execute on function public.org_vendors(uuid) to anon, authenticated, service_role;

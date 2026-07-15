@@ -58,6 +58,7 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /bills`         | List purchase bills / expenses (vendor, tax, aging, status, line) |
 | `POST /bills/:id/approve` 🔒 | Approve a bill → `ACCOUNTANT_APPROVED` (stamps approver)    |
 | `POST /bills/:id/reject` 🔒  | Reject a bill → `REJECTED`                                 |
+| `GET /vendors`       | Vendor directory with per-vendor bill count / spend / last activity |
 | `GET /sales`         | List POS sales with their line items                          |
 | `POST /sales` 🔒     | Record a sale `{ date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }` |
 | `GET /revenue`       | Revenue totals for a period `?from=YYYY-MM-DD&to=YYYY-MM-DD`   |

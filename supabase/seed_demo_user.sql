@@ -11,10 +11,14 @@ begin
   if v_id is null then
     v_id := gen_random_uuid();
     insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
-      email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
+      email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data,
+      -- GoTrue scans these as non-null strings; NULL breaks login ("Database
+      -- error querying schema"), so seed them as empty strings.
+      confirmation_token, recovery_token, email_change, email_change_token_new)
     values (v_id, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
       'owner@kashikeyo.local', extensions.crypt('kashikeyo-demo', extensions.gen_salt('bf')),
-      now(), now(), now(), '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb);
+      now(), now(), now(), '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb,
+      '', '', '', '');
     insert into auth.identities (provider_id, user_id, identity_data, provider,
       last_sign_in_at, created_at, updated_at)
     values (v_id::text, v_id,

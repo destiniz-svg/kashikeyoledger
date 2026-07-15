@@ -9,6 +9,7 @@ import {
   computeSale,
   toMinor,
   validateEntry,
+  vendorInitials,
   type AccountRow,
   type BillRow,
   type EntryInput,
@@ -18,6 +19,7 @@ import {
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
+  type VendorRow,
 } from "./store.ts";
 
 /** Demo purchase bills mirroring the seeded Supabase org (aging computed live). */
@@ -180,5 +182,28 @@ export class MemoryStore implements LedgerStore {
 
   async verifyMember(): Promise<boolean> {
     return false; // no auth provider for the in-memory backend
+  }
+
+  async listVendors(): Promise<VendorRow[]> {
+    const map = new Map<string, { tin: string; totalSpend: number; billCount: number; lastBillDate: string }>();
+    for (const b of this.#bills) {
+      const v = map.get(b.vendor) ?? { tin: b.tin, totalSpend: 0, billCount: 0, lastBillDate: b.date };
+      v.totalSpend += b.total;
+      v.billCount += 1;
+      map.set(b.vendor, v);
+    }
+    return [...map.entries()]
+      .sort((a, b) => b[1].totalSpend - a[1].totalSpend)
+      .map(([name, v], i) => ({
+        id: `vendor-${i + 1}`,
+        name,
+        tin: v.tin,
+        gstRegistered: true,
+        currency: "MVR",
+        billCount: v.billCount,
+        totalSpend: v.totalSpend,
+        lastBillDate: v.lastBillDate,
+        ini: vendorInitials(name),
+      }));
   }
 }
