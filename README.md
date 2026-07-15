@@ -55,6 +55,9 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /entries`       | List journal entries with their lines                         |
 | `POST /entries` 🔒   | Post an entry `{ date, memo, lines: [{ accountCode, debit?, credit? }] }` (requires API key) |
 | `GET /trial-balance` | Trial balance (per-account debit/credit + net balance)        |
+| `GET /sales`         | List POS sales with their line items                          |
+| `POST /sales` 🔒     | Record a sale `{ date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }` |
+| `GET /revenue`       | Revenue totals for a period `?from=YYYY-MM-DD&to=YYYY-MM-DD`   |
 
 Example — post a balanced entry:
 
@@ -85,7 +88,8 @@ Environment variables (see [`.env.example`](.env.example)):
 | `SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — a **secret**; set it in the host's env, never commit it |
 | `KASHIKEYO_ORG_ID` | The `organizations.id` this service operates on |
-| `KASHIKEYO_API_KEY` | API key required for write requests (see [Write authentication](#write-authentication)) |
+| `KASHIKEYO_API_KEY` | API key for writes + reads (see [Authentication](#authentication)) |
+| `KASHIKEYO_READ_API_KEY` | Optional read-only key (reads only, not writes) |
 | `PORT` | Provided by the host (Railway); defaults to `3000` |
 
 The service authenticates to Supabase as a trusted backend with the
@@ -93,26 +97,52 @@ service-role key (bypassing RLS) and scopes every query to `KASHIKEYO_ORG_ID`.
 Writes go through the `post_journal_entry` SQL function so the multi-row insert
 is atomic and balance-checked in the database.
 
-## Write authentication
+## Authentication
 
-Mutating requests (`POST /accounts`, `POST /entries`) require an API key; reads
-are open. Set `KASHIKEYO_API_KEY` and send it on writes as either header:
+Send the key as either header on a request:
 
 ```bash
-curl -X POST "$BASE_URL/entries" \
-  -H "X-API-Key: $KASHIKEYO_API_KEY" \
-  -H 'content-type: application/json' \
-  -d '{ "date": "2026-07-02", "memo": "...", "lines": [ ... ] }'
+curl "$BASE_URL/trial-balance" -H "X-API-Key: $KASHIKEYO_API_KEY"
 # or:  -H "Authorization: Bearer $KASHIKEYO_API_KEY"
 ```
 
-Responses: `401` if no key is presented, `403` if it is wrong, and `503` if the
-server has **no key configured** — writes are fail-closed, so an unset
-`KASHIKEYO_API_KEY` rejects all writes rather than leaving them open. Keys are
-compared in constant time. Generate one with:
+**Writes** (`POST /accounts`, `/entries`, `/sales`) require the full
+`KASHIKEYO_API_KEY`. They are **fail-closed**: `401` if no key is presented,
+`403` if it is wrong, and `503` if the server has no key configured (writes are
+never left open).
+
+**Reads** (`GET /accounts`, `/entries`, `/trial-balance`, `/sales`, `/revenue`)
+accept either the full key or an optional read-only `KASHIKEYO_READ_API_KEY`.
+When *any* key is configured, reads require a valid key (`401`/`403`); when none
+is configured they stay open (local dev). `GET /health` and `GET /` are always
+open. Keys are compared in constant time. Generate one with:
 
 ```bash
 node -e "console.log('sk_'+require('crypto').randomBytes(24).toString('hex'))"
+```
+
+## Revenue and sales
+
+Your `account_type` set has no `INCOME` type, so revenue is **not** posted to the
+double-entry journal — it lives in the `transactions` table. `POST /sales`
+records a `POS_SALE` transaction plus line items via the `record_sale` SQL
+function, computing each line's subtotal and tax (by `taxCategory` /
+`taxRatePercent`) and the transaction totals. `GET /revenue?from=&to=` returns
+revenue and tax totals for a period.
+
+Because `transactions.created_by` references a real user, API-recorded sales are
+attributed to a **system service-account** (`system@kashikeyo.local`), created
+once (see [`supabase/system_account.sql`](supabase/system_account.sql)).
+
+```bash
+curl -X POST "$BASE_URL/sales" \
+  -H "X-API-Key: $KASHIKEYO_API_KEY" -H 'content-type: application/json' -d '{
+  "date": "2026-07-10", "currency": "MVR",
+  "lines": [
+    { "description": "Room night", "quantity": 2, "unitPrice": 1500, "taxCategory": "TGST", "taxRatePercent": 16 },
+    { "description": "Bottled water", "quantity": 3, "unitPrice": 25, "taxCategory": "GGST", "taxRatePercent": 8 }
+  ]
+}'
 ```
 
 ### Library example

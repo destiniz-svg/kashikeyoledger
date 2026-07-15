@@ -6,14 +6,25 @@
  * Listens on `process.env.PORT` (Railway sets this), defaulting to 3000.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { authorizeWrite } from "./auth.ts";
+import { authorizeRead, authorizeWrite } from "./auth.ts";
 import { createStore } from "./createStore.ts";
-import { StoreError, type EntryInput } from "./store.ts";
+import { StoreError, type EntryInput, type SaleInput } from "./store.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
 const API_KEY = process.env.KASHIKEYO_API_KEY;
+const READ_API_KEY = process.env.KASHIKEYO_READ_API_KEY;
 const store = createStore();
+
+/** Data reads (not /health or /) require a valid read or write key. */
+function readGuard(req: IncomingMessage, res: ServerResponse): boolean {
+  const auth = authorizeRead(req.headers, { writeKey: API_KEY, readKey: READ_API_KEY });
+  if (!auth.ok) {
+    send(res, auth.status, { error: auth.message });
+    return false;
+  }
+  return true;
+}
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
@@ -61,19 +72,24 @@ const server = createServer(async (req, res) => {
         backend: store.backend,
         organization: store.org || null,
         writeAuth: API_KEY ? "required (X-API-Key or Bearer)" : "not configured",
+        readAuth: API_KEY || READ_API_KEY ? "required (X-API-Key or Bearer)" : "open",
         endpoints: [
           "GET /health",
-          "GET /accounts",
-          "POST /accounts { code, name, accountType }  [auth]",
-          "GET /entries",
-          "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [auth]",
-          "GET /trial-balance",
+          "GET /accounts  [read]",
+          "POST /accounts { code, name, accountType }  [write]",
+          "GET /entries  [read]",
+          "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [write]",
+          "GET /trial-balance  [read]",
+          "GET /sales  [read]",
+          "POST /sales { date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }  [write]",
+          "GET /revenue?from=YYYY-MM-DD&to=YYYY-MM-DD  [read]",
         ],
         outOfBalanceBy: await store.outOfBalanceBy(),
       });
     }
 
     if (method === "GET" && path === "/accounts") {
+      if (!readGuard(req, res)) return;
       return send(res, 200, await store.listAccounts());
     }
 
@@ -95,6 +111,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/entries") {
+      if (!readGuard(req, res)) return;
       return send(res, 200, await store.listEntries());
     }
 
@@ -112,8 +129,38 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/trial-balance") {
+      if (!readGuard(req, res)) return;
       const rows = await store.trialBalance();
       return send(res, 200, { rows, outOfBalanceBy: await store.outOfBalanceBy() });
+    }
+
+    if (method === "GET" && path === "/sales") {
+      if (!readGuard(req, res)) return;
+      return send(res, 200, await store.listSales());
+    }
+
+    if (method === "POST" && path === "/sales") {
+      const body = (await readJson(req)) as Partial<SaleInput>;
+      if (!body.date || !Array.isArray(body.lines)) {
+        return send(res, 400, { error: "date and lines[] are required" });
+      }
+      const result = await store.recordSale({
+        date: body.date,
+        currency: body.currency,
+        notes: body.notes,
+        lines: body.lines,
+      });
+      return send(res, 201, result);
+    }
+
+    if (method === "GET" && path === "/revenue") {
+      if (!readGuard(req, res)) return;
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      if (!from || !to) {
+        return send(res, 400, { error: "from and to query params are required (YYYY-MM-DD)" });
+      }
+      return send(res, 200, await store.revenue(from, to));
     }
 
     return send(res, 404, { error: `No route for ${method} ${path}` });

@@ -72,3 +72,36 @@ export function authorizeWrite(
   }
   return { ok: true, status: 200 };
 }
+
+/**
+ * Decide whether a data read is authorized. Reads accept either the full
+ * (write) key or an optional read-only key. When no keys are configured at all,
+ * reads are left open (development mode); once any key is set, a valid key is
+ * required.
+ *
+ * @param headers request headers
+ * @param keys the configured keys (write key and optional read-only key)
+ */
+export function authorizeRead(
+  headers: Headers,
+  keys: { writeKey?: string; readKey?: string },
+): WriteAuthResult {
+  const valid = [keys.writeKey, keys.readKey].filter(
+    (k): k is string => Boolean(k),
+  );
+  if (valid.length === 0) {
+    return { ok: true, status: 200 }; // no auth configured — open (dev)
+  }
+  const presented = extractApiKey(headers);
+  if (!presented) {
+    return {
+      ok: false,
+      status: 401,
+      message: "Missing API key (send X-API-Key or Authorization: Bearer)",
+    };
+  }
+  if (!valid.some((k) => safeEqual(presented, k))) {
+    return { ok: false, status: 403, message: "Invalid API key" };
+  }
+  return { ok: true, status: 200 };
+}
