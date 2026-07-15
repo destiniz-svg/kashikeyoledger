@@ -22,12 +22,12 @@ import {
 
 /** Demo purchase bills mirroring the seeded Supabase org (aging computed live). */
 const DEMO_BILLS: (Omit<BillRow, "aging"> & { dueIso: string })[] = [
-  { id: "bill-1", vendor: "Altura Pvt Ltd", tin: "1145053", invoice: "ALT/INV-000024", po: "PO-RDC-2026-003845", date: "05 Jul 2026", due: "20 Jul 2026", dueIso: "2026-07-20", cur: "MVR", subtotal: 91000, gst: 7280, total: 98280, cat: "Equipment", taxCat: "GGST", status: "AI_VERIFIED" },
-  { id: "bill-2", vendor: "Island Mark Hardware Pvt Ltd", tin: "—", invoice: "IMH-4471", po: "—", date: "11 May 2026", due: "26 May 2026", dueIso: "2026-05-26", cur: "MVR", subtotal: 4300, gst: 344, total: 4644, cat: "Hardware", taxCat: "GGST", status: "DRAFT" },
-  { id: "bill-3", vendor: "Ives Private Limited", tin: "—", invoice: "IVS-2026-118", po: "—", date: "11 May 2026", due: "25 May 2026", dueIso: "2026-05-25", cur: "MVR", subtotal: 6039.58, gst: 483.17, total: 6522.75, cat: "Supplies", taxCat: "GGST", status: "AI_VERIFIED" },
-  { id: "bill-4", vendor: "Tree Top Health Pvt Ltd", tin: "—", invoice: "TTH-9930", po: "—", date: "05 Feb 2026", due: "20 Feb 2026", dueIso: "2026-02-20", cur: "MVR", subtotal: 5809, gst: 0, total: 5809, cat: "Health", taxCat: "EXEMPT", status: "AI_VERIFIED" },
-  { id: "bill-5", vendor: "Beaver Builders Private Limited", tin: "—", invoice: "BB-3382", po: "—", date: "14 Jun 2026", due: "29 Jun 2026", dueIso: "2026-06-29", cur: "MVR", subtotal: 4233.72, gst: 338.7, total: 4572.42, cat: "Construction", taxCat: "GGST", status: "DRAFT" },
-  { id: "bill-6", vendor: "Island Choice LLP", tin: "—", invoice: "IC-7781", po: "—", date: "12 May 2026", due: "27 May 2026", dueIso: "2026-05-27", cur: "MVR", subtotal: 215, gst: 17.2, total: 232.2, cat: "F&B", taxCat: "GGST", status: "ACCOUNTANT_APPROVED" },
+  { id: "bill-1", vendor: "Altura Pvt Ltd", tin: "1145053", invoice: "ALT/INV-000024", po: "PO-RDC-2026-003845", date: "05 Jul 2026", due: "20 Jul 2026", dueIso: "2026-07-20", cur: "MVR", subtotal: 91000, gst: 7280, total: 98280, cat: "Equipment", taxCat: "GGST", status: "AI_VERIFIED", rate: 8, line: "Concrete Mixer (50KG - 1 Bag)", qty: 1, unit: 91000 },
+  { id: "bill-2", vendor: "Island Mark Hardware Pvt Ltd", tin: "—", invoice: "IMH-4471", po: "—", date: "11 May 2026", due: "26 May 2026", dueIso: "2026-05-26", cur: "MVR", subtotal: 4300, gst: 344, total: 4644, cat: "Hardware", taxCat: "GGST", status: "DRAFT", rate: 8, line: "Assorted fixings & tools", qty: 12, unit: 358.33 },
+  { id: "bill-3", vendor: "Ives Private Limited", tin: "—", invoice: "IVS-2026-118", po: "—", date: "11 May 2026", due: "25 May 2026", dueIso: "2026-05-25", cur: "MVR", subtotal: 6039.58, gst: 483.17, total: 6522.75, cat: "Supplies", taxCat: "GGST", status: "AI_VERIFIED", rate: 8, line: "Packaging & consumables", qty: 1, unit: 6039.58 },
+  { id: "bill-4", vendor: "Tree Top Health Pvt Ltd", tin: "—", invoice: "TTH-9930", po: "—", date: "05 Feb 2026", due: "20 Feb 2026", dueIso: "2026-02-20", cur: "MVR", subtotal: 5809, gst: 0, total: 5809, cat: "Health", taxCat: "EXEMPT", status: "AI_VERIFIED", rate: 0, line: "Staff medical services", qty: 1, unit: 5809 },
+  { id: "bill-5", vendor: "Beaver Builders Private Limited", tin: "—", invoice: "BB-3382", po: "—", date: "14 Jun 2026", due: "29 Jun 2026", dueIso: "2026-06-29", cur: "MVR", subtotal: 4233.72, gst: 338.7, total: 4572.42, cat: "Construction", taxCat: "GGST", status: "DRAFT", rate: 8, line: "Site labour & materials", qty: 1, unit: 4233.72 },
+  { id: "bill-6", vendor: "Island Choice LLP", tin: "—", invoice: "IC-7781", po: "—", date: "12 May 2026", due: "27 May 2026", dueIso: "2026-05-27", cur: "MVR", subtotal: 215, gst: 17.2, total: 232.2, cat: "F&B", taxCat: "GGST", status: "ACCOUNTANT_APPROVED", rate: 8, line: "Cafe supplies", qty: 1, unit: 215 },
 ];
 
 /** A small starter chart of accounts, matching the seeded Supabase demo org. */
@@ -51,6 +51,7 @@ export class MemoryStore implements LedgerStore {
   readonly #accounts = new Map<string, AccountRow>();
   readonly #entries: EntryRow[] = [];
   readonly #sales: SaleRow[] = [];
+  readonly #bills = DEMO_BILLS.map((b) => ({ ...b }));
 
   constructor(seed = true) {
     if (seed) {
@@ -164,9 +165,16 @@ export class MemoryStore implements LedgerStore {
   }
 
   async listBills(): Promise<BillRow[]> {
-    return DEMO_BILLS.map(({ dueIso, ...bill }) => ({
+    return this.#bills.map(({ dueIso, ...bill }) => ({
       ...bill,
       aging: agingBucket(dueIso),
     }));
+  }
+
+  async setBillStatus(id: string, status: string): Promise<{ id: string; status: string }> {
+    const bill = this.#bills.find((b) => b.id === id);
+    if (!bill) throw new StoreError(`Bill "${id}" not found`, 404);
+    bill.status = status;
+    return { id, status };
   }
 }

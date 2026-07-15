@@ -187,6 +187,20 @@ test("listBills returns the seeded bills with computed aging", async () => {
   assert.ok(["current", "1_30", "31_60", "61_90", "90_plus"].includes(altura?.aging ?? ""));
 });
 
+test("setBillStatus transitions a bill and persists in the store", async () => {
+  const s = new MemoryStore();
+  const before = (await s.listBills()).find((b) => b.id === "bill-2");
+  assert.equal(before?.status, "DRAFT");
+  const res = await s.setBillStatus("bill-2", "ACCOUNTANT_APPROVED");
+  assert.deepEqual(res, { id: "bill-2", status: "ACCOUNTANT_APPROVED" });
+  const after = (await s.listBills()).find((b) => b.id === "bill-2");
+  assert.equal(after?.status, "ACCOUNTANT_APPROVED");
+});
+
+test("setBillStatus on an unknown bill is rejected", async () => {
+  await assert.rejects(() => new MemoryStore().setBillStatus("nope", "REJECTED"), /not found/);
+});
+
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
   const s = new MemoryStore();
   await s.recordSale({

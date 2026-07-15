@@ -17,5 +17,14 @@ async function get(path) {
   return res.json();
 }
 
+async function post(path) {
+  const headers = KEY ? { "x-api-key": KEY } : {};
+  const res = await fetch(`${BASE}${path}`, { method: "POST", headers });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+
 export const getDashboard = () => get("/dashboard");
 export const getBills = () => get("/bills");
+export const approveBill = (id) => post(`/bills/${encodeURIComponent(id)}/approve`);
+export const rejectBill = (id) => post(`/bills/${encodeURIComponent(id)}/reject`);

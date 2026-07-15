@@ -124,6 +124,8 @@ const server = createServer(async (req, res) => {
           "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [write]",
           "GET /trial-balance  [read]",
           "GET /bills  [read]",
+          "POST /bills/:id/approve  [write]",
+          "POST /bills/:id/reject  [write]",
           "GET /sales  [read]",
           "POST /sales { date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }  [write]",
           "GET /revenue?from=YYYY-MM-DD&to=YYYY-MM-DD  [read]",
@@ -266,6 +268,13 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/bills") {
       if (!readGuard(req, res)) return;
       return send(res, 200, await store.listBills());
+    }
+
+    const billAction = /^\/bills\/([^/]+)\/(approve|reject)$/.exec(path);
+    if (method === "POST" && billAction) {
+      const [, id, action] = billAction;
+      const status = action === "approve" ? "ACCOUNTANT_APPROVED" : "REJECTED";
+      return send(res, 200, await store.setBillStatus(id, status));
     }
 
     if (method === "GET" && path === "/sales") {
