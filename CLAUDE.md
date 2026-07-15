@@ -4,9 +4,21 @@ Guidance for Claude Code (and Claude Projects) working in this repository.
 
 ## What this is
 
-Kashikeyo Ledger — a small, dependency-free double-entry accounting ledger in
-TypeScript. It runs directly on Node.js 22+ via native type stripping, so there
-is **no build step** and **no runtime dependencies**.
+Kashikeyo Ledger — a dependency-free double-entry accounting service in
+TypeScript, on Node.js 22+ via native type stripping (**no build step**, **no
+runtime dependencies**).
+
+Two layers:
+- **HTTP API** (`src/server.ts`) over a `LedgerStore`. Backend is chosen by
+  `createStore()`: **Supabase** (real schema: `ledger_accounts`,
+  `journal_entries`, `journal_lines`, org-scoped) when `SUPABASE_URL` +
+  `SUPABASE_SERVICE_ROLE_KEY` + `KASHIKEYO_ORG_ID` are set, else an **in-memory**
+  store.
+- **Pure library** (`src/ledger.ts`, `src/money.ts`) — standalone in-memory
+  engine with integer-minor-unit money, used by `src/demo.ts`.
+
+Writes to Supabase go through the `post_journal_entry` SQL function (see
+`supabase/functions.sql`) so the insert is atomic and balance-checked in the DB.
 
 ## Commands
 
@@ -31,23 +43,25 @@ node --test test/ledger.test.ts
 
 ## Conventions
 
-- **Money is integer minor units** (cents). Never store money as a float.
-  Convert user-facing decimals with `fromMajor` and render with `formatMoney`
-  (both in `src/money.ts`).
-- **Amounts on postings are always positive**; the `direction` (`"debit"` /
-  `"credit"`) carries the meaning, not the sign.
-- **Balances are derived**, never stored. Anything that changes account state
-  goes through `Ledger.post()` so the balancing invariant is enforced in one
-  place.
-- Prefer plain functions and small, explicit types. Keep the core free of
-  external dependencies.
-- Use `.ts` extensions in imports (required by NodeNext + native type
-  stripping), e.g. `import { Ledger } from "./ledger.ts"`.
+- **Account types** are limited by the DB check constraint to
+  `ASSET, LIABILITY, EXPENSE, COGS, TAX, BANK, FX` (no `EQUITY`/`INCOME`).
+- **API/store amounts are decimal major units** (numeric, e.g. MVR), matching
+  the `debit`/`credit` columns. Balance checks compare in minor units
+  (`toMinor`, `Math.round(x*100)`) to avoid float wobble.
+- The **pure library** (`src/ledger.ts`) uses **integer minor units**; don't
+  conflate the two layers.
+- **No native TS beyond type-stripping**: Node runs `.ts` in strip-only mode, so
+  do NOT use enums, `namespace`, decorators, or constructor **parameter
+  properties** (`constructor(readonly x)`). Declare fields explicitly.
+- Use `.ts` extensions in imports (NodeNext + type stripping), e.g.
+  `import { createStore } from "./createStore.ts"`.
+- The service-role key is a secret: read from env only, never commit it.
 
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`
-  green.
-- Keep the accounting invariant intact: every posted entry must balance
-  (total debits == total credits) and `Ledger.outOfBalanceBy()` must stay `0`
-  for a consistent set of books.
+  green (runs entirely on the in-memory backend — no network).
+- Keep the balancing invariant intact in both layers: every entry must balance
+  (total debits == total credits) and `outOfBalanceBy()` must stay `0`.
+- Changing DB behavior means updating both the SQL (`supabase/functions.sql`,
+  applied as a migration) and the matching store/tests.

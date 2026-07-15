@@ -1,26 +1,33 @@
 # Kashikeyo Ledger
 
-A small, dependency-free **double-entry accounting ledger** written in
-TypeScript. It runs directly on Node.js 22+ using native type stripping — no
-build step, no runtime dependencies.
+A dependency-free **double-entry accounting** service in TypeScript, running on
+Node.js 22+ via native type stripping — no build step, no runtime dependencies.
+
+It has two layers:
+
+1. **HTTP API** (`src/server.ts`) — the deployed service. It reads and writes
+   the real Kashikeyo Ledger schema in **Supabase** (`ledger_accounts`,
+   `journal_entries`, `journal_lines`), scoped to one organization. Without
+   Supabase env vars it falls back to an in-memory store so it still runs
+   locally. See [Backends](#backends).
+2. **Pure library** (`src/ledger.ts`) — a standalone, in-memory double-entry
+   engine with integer-minor-unit money, used by the demo and unit-tested in
+   isolation.
 
 ## What it does
 
-- Register **accounts** across the five standard categories (asset, liability,
-  equity, income, expense), each with a currency.
-- Record **journal entries** made of debit/credit **postings**. Entries are
-  only accepted if they:
-  - have at least two postings,
-  - reference known accounts,
-  - use a single currency,
-  - use positive amounts, and
-  - **balance** (total debits equal total credits).
-- Derive **account balances**, a **trial balance**, and an
-  `outOfBalanceBy()` check straight from the entry history, so the ledger is
-  always internally consistent.
+- Journal entries are only accepted if they **balance** (total debits equal
+  total credits), have at least two lines, each line has exactly one of
+  debit/credit, and reference known accounts — enforced both in the API layer
+  and in the database (`post_journal_entry` SQL function).
+- `GET /trial-balance` returns per-account debit/credit totals and a net
+  balance, plus an `outOfBalanceBy` figure that is `0` for consistent books.
 
-Money is stored as **integer minor units** (e.g. cents) to avoid
-floating-point rounding errors.
+### Account types
+
+The database constrains `account_type` to
+`ASSET, LIABILITY, EXPENSE, COGS, TAX, BANK, FX` (note: **no** `EQUITY` or
+`INCOME` — revenue/equity are modelled elsewhere in the wider schema).
 
 ## Requirements
 
@@ -37,20 +44,55 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 
 ### HTTP API
 
-`npm start` runs a small dependency-free JSON API (state is in-memory and
-resets on restart):
+`npm start` runs a small dependency-free JSON API:
 
-| Method & path        | Description                                   |
-| -------------------- | --------------------------------------------- |
-| `GET /health`        | Health check (used by the deploy platform)    |
-| `GET /`              | Service info and endpoint list                |
-| `GET /accounts`      | List accounts                                 |
-| `POST /accounts`     | Create an account `{ id, name, type, currency? }` |
-| `GET /entries`       | List journal entries                          |
-| `POST /entries`      | Post an entry `{ date, description, postings[] }` |
-| `GET /trial-balance` | Trial balance for all accounts                |
+| Method & path        | Description                                                    |
+| -------------------- | ------------------------------------------------------------- |
+| `GET /health`        | Health check (used by the deploy platform); reports `backend` |
+| `GET /`              | Service info, endpoint list, and `outOfBalanceBy`             |
+| `GET /accounts`      | List the chart of accounts                                    |
+| `POST /accounts`     | Create an account `{ code, name, accountType }`               |
+| `GET /entries`       | List journal entries with their lines                         |
+| `POST /entries`      | Post an entry `{ date, memo, lines: [{ accountCode, debit?, credit? }] }` |
+| `GET /trial-balance` | Trial balance (per-account debit/credit + net balance)        |
 
-### Example
+Example — post a balanced entry:
+
+```bash
+curl -X POST "$BASE_URL/entries" -H 'content-type: application/json' -d '{
+  "date": "2026-07-02",
+  "memo": "Purchase inventory on account",
+  "lines": [
+    { "accountCode": "1200", "debit": 5000 },
+    { "accountCode": "2000", "credit": 5000 }
+  ]
+}'
+```
+
+## Backends
+
+`createStore()` selects the backend from the environment:
+
+| Condition | Backend |
+| --- | --- |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `KASHIKEYO_ORG_ID` all set | **Supabase** — reads/writes the real schema for that organization |
+| otherwise | **in-memory** — seeded starter chart, resets on restart |
+
+Environment variables (see [`.env.example`](.env.example)):
+
+| Variable | Description |
+| --- | --- |
+| `SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — a **secret**; set it in the host's env, never commit it |
+| `KASHIKEYO_ORG_ID` | The `organizations.id` this service operates on |
+| `PORT` | Provided by the host (Railway); defaults to `3000` |
+
+The service authenticates to Supabase as a trusted backend with the
+service-role key (bypassing RLS) and scopes every query to `KASHIKEYO_ORG_ID`.
+Writes go through the `post_journal_entry` SQL function so the multi-row insert
+is atomic and balance-checked in the database.
+
+### Library example
 
 ```ts
 import { Ledger, account, credit, debit, fromMajor, formatMoney } from "./src/index.ts";
@@ -76,14 +118,18 @@ See [`src/demo.ts`](src/demo.ts) for a fuller worked example.
 
 ## Project layout
 
-| Path             | Purpose                                            |
-| ---------------- | -------------------------------------------------- |
-| `src/money.ts`   | Integer minor-unit money helpers                   |
-| `src/types.ts`   | Account / posting / journal-entry types            |
-| `src/ledger.ts`  | The `Ledger` class and validation                  |
-| `src/index.ts`   | Public API surface                                 |
-| `src/demo.ts`    | Runnable worked example                            |
-| `test/`          | `node:test` unit tests                             |
+| Path                  | Purpose                                                     |
+| --------------------- | ---------------------------------------------------------- |
+| `src/server.ts`       | HTTP API (the deployed service)                            |
+| `src/store.ts`        | `LedgerStore` interface, shared validation, error types    |
+| `src/supabaseStore.ts`| Supabase-backed store (real schema, via PostgREST + RPC)   |
+| `src/memoryStore.ts`  | In-memory store (local dev / tests)                        |
+| `src/createStore.ts`  | Picks the backend from environment variables               |
+| `src/ledger.ts`       | Pure in-memory double-entry engine (library)               |
+| `src/money.ts`        | Integer minor-unit money helpers (library)                 |
+| `src/demo.ts`         | Runnable worked example of the library                     |
+| `supabase/`           | SQL for the demo seed and ledger functions                 |
+| `test/`               | `node:test` unit tests                                     |
 
 ## Deploying to Railway
 
@@ -95,12 +141,18 @@ dependencies, Railway just installs and starts the service.
 1. Push this repo to GitHub (already the case).
 2. In Railway: **New Project → Deploy from GitHub repo**, and pick this repo /
    the deployment branch.
-3. Railway builds with Railpack, then runs `npm start`. It injects `$PORT`
-   automatically — the server binds to it (`0.0.0.0:$PORT`).
-4. Under the service's **Settings → Networking**, click **Generate Domain** to
-   get a public URL, then hit `https://<domain>/health`.
+3. Add the service **Variables** (Settings → Variables):
+   - `SUPABASE_URL` — your project URL
+   - `SUPABASE_SERVICE_ROLE_KEY` — your service-role key (secret)
+   - `KASHIKEYO_ORG_ID` — the organization id to operate on
+   (`PORT` is injected by Railway automatically.)
+4. Railway builds with Railpack, then runs `npm start` and binds `0.0.0.0:$PORT`.
+5. Under **Settings → Networking**, click **Generate Domain**, then check
+   `https://<domain>/health` (should report `"backend":"supabase"`) and
+   `https://<domain>/trial-balance`.
 
-No environment variables are required.
+Without the Supabase variables the service still boots on the in-memory backend
+(`"backend":"memory"`), useful for a first smoke test.
 
 ## Status
 

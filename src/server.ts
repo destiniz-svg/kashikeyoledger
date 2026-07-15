@@ -1,22 +1,17 @@
 /**
- * A minimal, dependency-free HTTP API around the ledger, suitable for
- * deploying as a web service (e.g. on Railway). State is in-memory and resets
- * on restart — this is a demonstration surface, not a persistence layer.
+ * HTTP API for the Kashikeyo Ledger, backed by a LedgerStore. In production the
+ * store is Supabase (the real schema, scoped to one organization); with no
+ * Supabase env vars it falls back to an in-memory store.
  *
  * Listens on `process.env.PORT` (Railway sets this), defaulting to 3000.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { Ledger, LedgerError, account } from "./ledger.ts";
-import { formatMoney } from "./money.ts";
-import type { AccountType, Posting } from "./types.ts";
+import { createStore } from "./createStore.ts";
+import { StoreError, type EntryInput } from "./store.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
-
-const ledger = new Ledger();
-// Seed a couple of common accounts so the service is usable immediately.
-ledger.addAccount(account("cash", "Cash", "asset"));
-ledger.addAccount(account("capital", "Owner's Capital", "equity"));
+const store = createStore();
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body, null, 2);
@@ -40,16 +35,6 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw);
 }
 
-function trialBalanceView() {
-  return ledger.trialBalance().map((row) => ({
-    accountId: row.accountId,
-    name: row.name,
-    type: row.type,
-    balanceMinor: row.balance,
-    balance: formatMoney(row.balance),
-  }));
-}
-
 const server = createServer(async (req, res) => {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -57,79 +42,74 @@ const server = createServer(async (req, res) => {
 
   try {
     if (method === "GET" && path === "/health") {
-      return send(res, 200, { status: "ok" });
+      return send(res, 200, { status: "ok", backend: store.backend });
     }
 
     if (method === "GET" && path === "/") {
       return send(res, 200, {
         service: "kashikeyo-ledger",
         status: "ok",
+        backend: store.backend,
+        organization: store.org || null,
         endpoints: [
           "GET /health",
           "GET /accounts",
-          "POST /accounts { id, name, type, currency? }",
+          "POST /accounts { code, name, accountType }",
           "GET /entries",
-          "POST /entries { date, description, postings: [{ accountId, amount, direction }] }",
+          "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }",
           "GET /trial-balance",
         ],
-        outOfBalanceBy: formatMoney(ledger.outOfBalanceBy()),
+        outOfBalanceBy: await store.outOfBalanceBy(),
       });
     }
 
     if (method === "GET" && path === "/accounts") {
-      return send(res, 200, ledger.accounts());
+      return send(res, 200, await store.listAccounts());
     }
 
     if (method === "POST" && path === "/accounts") {
       const body = (await readJson(req)) as {
-        id?: string;
+        code?: string;
         name?: string;
-        type?: AccountType;
-        currency?: string;
+        accountType?: string;
       };
-      if (!body.id || !body.name || !body.type) {
-        return send(res, 400, { error: "id, name and type are required" });
+      if (!body.code || !body.name || !body.accountType) {
+        return send(res, 400, { error: "code, name and accountType are required" });
       }
-      const created = ledger.addAccount(
-        account(body.id, body.name, body.type, body.currency ?? "USD"),
-      );
+      const created = await store.createAccount({
+        code: body.code,
+        name: body.name,
+        accountType: body.accountType,
+      });
       return send(res, 201, created);
     }
 
     if (method === "GET" && path === "/entries") {
-      return send(res, 200, ledger.entries());
+      return send(res, 200, await store.listEntries());
     }
 
     if (method === "POST" && path === "/entries") {
-      const body = (await readJson(req)) as {
-        date?: string;
-        description?: string;
-        postings?: Posting[];
-      };
-      if (!body.date || !body.description || !Array.isArray(body.postings)) {
-        return send(res, 400, {
-          error: "date, description and postings[] are required",
-        });
+      const body = (await readJson(req)) as Partial<EntryInput>;
+      if (!body.date || !body.memo || !Array.isArray(body.lines)) {
+        return send(res, 400, { error: "date, memo and lines[] are required" });
       }
-      const entry = ledger.post({
+      const result = await store.postEntry({
         date: body.date,
-        description: body.description,
-        postings: body.postings,
+        memo: body.memo,
+        lines: body.lines,
       });
-      return send(res, 201, entry);
+      return send(res, 201, result);
     }
 
     if (method === "GET" && path === "/trial-balance") {
-      return send(res, 200, {
-        rows: trialBalanceView(),
-        outOfBalanceBy: formatMoney(ledger.outOfBalanceBy()),
-      });
+      const rows = await store.trialBalance();
+      return send(res, 200, { rows, outOfBalanceBy: await store.outOfBalanceBy() });
     }
 
     return send(res, 404, { error: `No route for ${method} ${path}` });
   } catch (err) {
-    if (err instanceof LedgerError) {
-      return send(res, 422, { error: err.message });
+    if (err instanceof StoreError) {
+      return send(res, err.status, { error: err.message });
     }
     if (err instanceof SyntaxError) {
       return send(res, 400, { error: "Invalid JSON body" });
@@ -140,5 +120,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`kashikeyo-ledger listening on http://${HOST}:${PORT}`);
+  console.log(
+    `kashikeyo-ledger listening on http://${HOST}:${PORT} (backend: ${store.backend})`,
+  );
 });
