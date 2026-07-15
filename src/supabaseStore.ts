@@ -20,6 +20,8 @@ import {
   type LedgerStore,
   type RevenueSummary,
   type GstFilingRow,
+  type ItemRow,
+  itemStatus,
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
@@ -376,6 +378,38 @@ export class SupabaseStore implements LedgerStore {
       lastBillDate: formatBillDate(r.last_bill_date),
       ini: vendorInitials(r.name),
     }));
+  }
+
+  async listItems(): Promise<ItemRow[]> {
+    const query =
+      `/rest/v1/items?organization_id=eq.${this.org}&is_active=eq.true` +
+      `&select=id,sku,name,unit_of_measure,quantity_on_hand,weighted_avg_cost,low_stock_threshold` +
+      `&order=name`;
+    const rows = (await this.#request(query)) as {
+      id: string;
+      sku: string;
+      name: string;
+      unit_of_measure: string;
+      quantity_on_hand: string | number;
+      weighted_avg_cost: string | number;
+      low_stock_threshold: string | number | null;
+    }[];
+    return rows.map((r) => {
+      const qty = Number(r.quantity_on_hand);
+      const cost = Number(r.weighted_avg_cost);
+      const threshold = r.low_stock_threshold == null ? null : Number(r.low_stock_threshold);
+      return {
+        id: r.id,
+        sku: r.sku,
+        name: r.name,
+        unit: r.unit_of_measure,
+        qtyOnHand: qty,
+        avgCost: cost,
+        stockValue: Math.round(qty * cost * 100) / 100,
+        threshold,
+        status: itemStatus(qty, threshold),
+      };
+    });
   }
 
   async listGstFilings(): Promise<GstFilingRow[]> {

@@ -141,6 +141,7 @@ const server = createServer(async (req, res) => {
           "GET /trial-balance  [read]",
           "GET /bills  [read]",
           "GET /vendors  [read]",
+          "GET /inventory  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
           "POST /bills/:id/approve  [write]",
@@ -292,6 +293,17 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/vendors") {
       if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listVendors());
+    }
+
+    if (method === "GET" && path === "/inventory") {
+      if (!(await readGuard(req, res))) return;
+      const items = await store.listItems();
+      return send(res, 200, {
+        items,
+        totalValue: Math.round(items.reduce((s, i) => s + i.stockValue, 0) * 100) / 100,
+        lowCount: items.filter((i) => i.status === "low").length,
+        outCount: items.filter((i) => i.status === "out").length,
+      });
     }
 
     if (method === "GET" && path === "/tax-filing") {

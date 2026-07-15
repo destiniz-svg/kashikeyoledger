@@ -134,6 +134,26 @@ export interface GstFilingRow {
   netPayable: number; // Box 10 = Box 6 − Box 7
 }
 
+/** An inventory item with stock valuation. */
+export interface ItemRow {
+  id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  qtyOnHand: number;
+  avgCost: number;
+  stockValue: number;
+  threshold: number | null;
+  status: string; // "in_stock" | "low" | "out"
+}
+
+/** Stock status from quantity on hand and a low-stock threshold. */
+export function itemStatus(qty: number, threshold: number | null): string {
+  if (qty <= 0) return "out";
+  if (threshold != null && qty <= threshold) return "low";
+  return "in_stock";
+}
+
 /** A vendor with spend rollups, shaped for the Vendors screen. */
 export interface VendorRow {
   id: string;
@@ -198,6 +218,7 @@ export interface LedgerStore {
   verifyMember(token: string): Promise<boolean>;
 
   listVendors(): Promise<VendorRow[]>;
+  listItems(): Promise<ItemRow[]>;
   listGstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;
