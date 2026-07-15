@@ -16,14 +16,18 @@ const API_KEY = process.env.KASHIKEYO_API_KEY;
 const READ_API_KEY = process.env.KASHIKEYO_READ_API_KEY;
 const store = createStore();
 
-/** Data reads (not /health or /) require a valid read or write key. */
-function readGuard(req: IncomingMessage, res: ServerResponse): boolean {
+/**
+ * Data reads (not /health or /) require a valid read/write key OR a logged-in
+ * organization member's token — so a signed-in browser user can read even when
+ * no read key is configured.
+ */
+async function readGuard(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const auth = authorizeRead(req.headers, { writeKey: API_KEY, readKey: READ_API_KEY });
-  if (!auth.ok) {
-    send(res, auth.status, { error: auth.message });
-    return false;
-  }
-  return true;
+  if (auth.ok) return true;
+  const presented = extractApiKey(req.headers);
+  if (presented && (await store.verifyMember(presented))) return true;
+  send(res, auth.status, { error: auth.message });
+  return false;
 }
 
 /**
@@ -148,7 +152,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/accounts") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listAccounts());
     }
 
@@ -170,7 +174,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/entries") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listEntries());
     }
 
@@ -188,13 +192,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/trial-balance") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       const rows = await store.trialBalance();
       return send(res, 200, { rows, outOfBalanceBy: await store.outOfBalanceBy() });
     }
 
     if (method === "GET" && path === "/dashboard") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       const tb = await store.trialBalance();
       const sumBy = (types: string[]) =>
         tb.filter((r) => types.includes(r.accountType)).reduce((s, r) => s + r.balance, 0);
@@ -279,12 +283,12 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/bills") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listBills());
     }
 
     if (method === "GET" && path === "/vendors") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listVendors());
     }
 
@@ -296,7 +300,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/sales") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listSales());
     }
 
@@ -315,7 +319,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === "GET" && path === "/revenue") {
-      if (!readGuard(req, res)) return;
+      if (!(await readGuard(req, res))) return;
       const from = url.searchParams.get("from");
       const to = url.searchParams.get("to");
       if (!from || !to) {
