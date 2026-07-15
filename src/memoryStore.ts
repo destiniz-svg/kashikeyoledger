@@ -13,6 +13,7 @@ import {
   formatBillDate,
   nameInitials,
   normalizeImportLines,
+  normalizeSettingsPatch,
   toMinor,
   validateEntry,
   vendorInitials,
@@ -24,6 +25,7 @@ import {
   type ImportResult,
   type MemberRow,
   type OrgSettings,
+  type OrgSettingsPatch,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -258,21 +260,29 @@ export class MemoryStore implements LedgerStore {
     return { name: "Kashikeyo Demo Co", tin: "" };
   }
 
+  #settings: OrgSettings = {
+    name: "Kashikeyo Demo Co",
+    tin: "",
+    sector: "GENERAL",
+    industryCode: "",
+    baseCurrency: "MVR",
+    reportingCurrency: "MVR",
+    timezone: "Indian/Maldives",
+    gstRegistered: true,
+    gstFilingFrequency: "MONTHLY",
+    fiscalYearStartMonth: 1,
+    greenTaxEnabled: false,
+    greenTaxRateUsd: 12,
+  };
+
   async orgSettings(): Promise<OrgSettings> {
-    return {
-      name: "Kashikeyo Demo Co",
-      tin: "",
-      sector: "GENERAL",
-      industryCode: "",
-      baseCurrency: "MVR",
-      reportingCurrency: "MVR",
-      timezone: "Indian/Maldives",
-      gstRegistered: true,
-      gstFilingFrequency: "MONTHLY",
-      fiscalYearStartMonth: 1,
-      greenTaxEnabled: false,
-      greenTaxRateUsd: 12,
-    };
+    return { ...this.#settings };
+  }
+
+  async updateOrgSettings(patch: OrgSettingsPatch): Promise<OrgSettings> {
+    const clean = normalizeSettingsPatch(patch);
+    this.#settings = { ...this.#settings, ...clean };
+    return { ...this.#settings };
   }
 
   async listMembers(): Promise<MemberRow[]> {

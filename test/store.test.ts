@@ -371,6 +371,31 @@ test("orgSettings returns the org profile and tax registration", async () => {
   assert.equal(s.fiscalYearStartMonth, 1);
 });
 
+test("updateOrgSettings applies a patch and persists it", async () => {
+  const s = new MemoryStore();
+  const updated = await s.updateOrgSettings({ name: "Kashikeyo Resorts", sector: "TOURISM", greenTaxRateUsd: 6 });
+  assert.equal(updated.name, "Kashikeyo Resorts");
+  assert.equal(updated.sector, "TOURISM");
+  assert.equal(updated.greenTaxRateUsd, 6);
+  // Untouched fields keep their value; the change persists on the next read.
+  const again = await s.orgSettings();
+  assert.equal(again.name, "Kashikeyo Resorts");
+  assert.equal(again.baseCurrency, "MVR");
+  assert.equal(again.gstFilingFrequency, "MONTHLY");
+});
+
+test("updateOrgSettings validates enums, ranges and required fields", async () => {
+  const s = new MemoryStore();
+  await assert.rejects(() => s.updateOrgSettings({ name: "  " }), /name cannot be empty/);
+  await assert.rejects(() => s.updateOrgSettings({ sector: "MINING" }), /Sector must be one of/);
+  await assert.rejects(() => s.updateOrgSettings({ gstFilingFrequency: "DAILY" }), /filing frequency/);
+  await assert.rejects(() => s.updateOrgSettings({ fiscalYearStartMonth: 13 }), /between 1 and 12/);
+  await assert.rejects(() => s.updateOrgSettings({ greenTaxRateUsd: -1 }), /zero or more/);
+  // An empty patch is a no-op, not an error.
+  const same = await s.updateOrgSettings({});
+  assert.equal(same.name, "Kashikeyo Demo Co");
+});
+
 test("listMembers returns members with role and initials", async () => {
   const members = await new MemoryStore().listMembers();
   assert.ok(members.length >= 1);

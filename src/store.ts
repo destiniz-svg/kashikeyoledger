@@ -303,6 +303,76 @@ export interface OrgSettings {
   greenTaxRateUsd: number;
 }
 
+/** Business sectors and GST filing frequencies allowed by the DB. */
+export const BUSINESS_SECTORS = ["GENERAL", "TOURISM"] as const;
+export const GST_FREQUENCIES = ["MONTHLY", "QUARTERLY"] as const;
+
+/** The subset of OrgSettings the Settings screen may edit (currency is fixed). */
+export type OrgSettingsPatch = Partial<
+  Pick<
+    OrgSettings,
+    | "name"
+    | "tin"
+    | "sector"
+    | "industryCode"
+    | "timezone"
+    | "gstRegistered"
+    | "gstFilingFrequency"
+    | "fiscalYearStartMonth"
+    | "greenTaxEnabled"
+    | "greenTaxRateUsd"
+  >
+>;
+
+/**
+ * Validate and normalize an editable-settings patch: only recognised keys are
+ * kept, enums/ranges are checked, and text is trimmed. Throws StoreError on bad
+ * input. Returns a clean patch (may be empty).
+ */
+export function normalizeSettingsPatch(input: unknown): OrgSettingsPatch {
+  const src = (input ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(src, k);
+  const str = (v: unknown) => (v == null ? "" : String(v).trim());
+
+  if (has("name")) {
+    const name = str(src.name);
+    if (!name) throw new StoreError("Organization name cannot be empty");
+    out.name = name;
+  }
+  if (has("tin")) out.tin = str(src.tin);
+  if (has("industryCode")) out.industryCode = str(src.industryCode);
+  if (has("timezone")) out.timezone = str(src.timezone);
+  if (has("sector")) {
+    const sector = str(src.sector).toUpperCase();
+    if (!(BUSINESS_SECTORS as readonly string[]).includes(sector)) {
+      throw new StoreError(`Sector must be one of ${BUSINESS_SECTORS.join(", ")}`);
+    }
+    out.sector = sector;
+  }
+  if (has("gstFilingFrequency")) {
+    const freq = str(src.gstFilingFrequency).toUpperCase();
+    if (!(GST_FREQUENCIES as readonly string[]).includes(freq)) {
+      throw new StoreError(`GST filing frequency must be one of ${GST_FREQUENCIES.join(", ")}`);
+    }
+    out.gstFilingFrequency = freq;
+  }
+  if (has("fiscalYearStartMonth")) {
+    const m = Number(src.fiscalYearStartMonth);
+    if (!Number.isInteger(m) || m < 1 || m > 12) {
+      throw new StoreError("Fiscal year start month must be an integer between 1 and 12");
+    }
+    out.fiscalYearStartMonth = m;
+  }
+  if (has("greenTaxEnabled")) out.greenTaxEnabled = Boolean(src.greenTaxEnabled);
+  if (has("greenTaxRateUsd")) {
+    const r = Number(src.greenTaxRateUsd);
+    if (!Number.isFinite(r) || r < 0) throw new StoreError("Green tax rate must be zero or more");
+    out.greenTaxRateUsd = round2(r);
+  }
+  return out as OrgSettingsPatch;
+}
+
 /** A team member of the organization (Settings screen). */
 export interface MemberRow {
   name: string;
@@ -414,6 +484,8 @@ export interface LedgerStore {
 
   /** Organization profile + tax registration for the Settings screen. */
   orgSettings(): Promise<OrgSettings>;
+  /** Apply an editable-settings patch and return the updated profile. */
+  updateOrgSettings(patch: OrgSettingsPatch): Promise<OrgSettings>;
   /** Team members of the organization. */
   listMembers(): Promise<MemberRow[]>;
 }

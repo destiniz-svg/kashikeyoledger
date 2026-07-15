@@ -69,6 +69,7 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /reports`       | Financial KPIs, AP aging, and spend-by-category                |
 | `GET /transactions`  | Unified log of bills/expenses and POS sales (money in/out, net) |
 | `GET /settings`      | Organization profile, tax registration, and team members       |
+| `PATCH /settings` 🔒 | Update the org profile (name, TIN, sector, timezone, tax registration…) |
 | `GET /sales`         | List POS sales with their line items                          |
 | `POST /sales` 🔒     | Record a sale `{ date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }` |
 | `GET /revenue`       | Revenue totals for a period `?from=YYYY-MM-DD&to=YYYY-MM-DD`   |
@@ -125,7 +126,7 @@ curl "$BASE_URL/trial-balance" -H "X-API-Key: $KASHIKEYO_API_KEY"
 ```
 
 **Writes** (`POST /accounts`, `/entries`, `/sales`, `/bills/:id/approve|reject`,
-`/banking/import`, `/banking/:txnId/confirm|exclude|unmatch`)
+`/banking/import`, `/banking/:txnId/confirm|exclude|unmatch`, `PATCH /settings`)
 require **either** the full `KASHIKEYO_API_KEY` (server-to-server) **or** a
 Supabase access token from a logged-in **organization member** (browser users) —
 sent as `Authorization: Bearer <token>`. The server verifies the token against
