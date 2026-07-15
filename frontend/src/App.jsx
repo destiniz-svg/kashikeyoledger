@@ -1231,55 +1231,67 @@ const FilingChip = ({ s }) => {
     padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
 };
 const F0 = { sales8: 0, salesZero: 0, salesExempt: 0, salesOos: 0 };
-const FILING_DEMO = [
-  { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", ...F0, outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
-  { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", ...F0, outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
-  { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", ...F0, sales8: 81, outputTax: 6, inputTax: 7280, netPayable: -7274 },
-  { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+// Sample calendars for both returns — replaced by live data when available.
+const FORMS_DEMO = [
+  { form: "MIRA_205_GGST", tax: "GGST", mira: "MIRA 205", rate: 8, filings: [
+    { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", ...F0, outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
+    { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", ...F0, outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
+    { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", ...F0, sales8: 81, outputTax: 6, inputTax: 7280, netPayable: -7274 },
+    { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  ] },
+  { form: "MIRA_206_TGST", tax: "TGST", mira: "MIRA 206", rate: 17, filings: [
+    { id: "t-4", form: "MIRA_206_TGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+    { id: "t-5", form: "MIRA_206_TGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+    { id: "t-6", form: "MIRA_206_TGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", ...F0, sales8: 3480, outputTax: 480, inputTax: 0, netPayable: 480 },
+    { id: "t-7", form: "MIRA_206_TGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
+  ] },
 ];
 
-// MIRA 205 boxes for a filing period. Amounts are rounded to the nearest
-// Rufiyaa, matching the official return.
-function mira205Boxes(f) {
+// Return boxes for a filing period, parameterized by tax name + rate so the same
+// layout serves MIRA 205 (GGST 8%) and MIRA 206 (TGST 17%). Amounts are rounded
+// to the nearest Rufiyaa, matching the official return.
+function miraBoxes(f, rate = 8, tax = "GST") {
   const r = (n) => Math.round(n);
   const totalSales = f.sales8 + f.salesZero + f.salesExempt + f.salesOos;
   const liability = f.outputTax - f.inputTax; // Box 6 − Box 7 (Box 8 = Box 9 = 0)
   return [
-    ["1", "Sales of supplies subject to GST at 8% (inclusive of GST)", r(f.sales8)],
+    ["1", `Sales of supplies subject to ${tax} at ${rate}% (inclusive of ${tax})`, r(f.sales8)],
     ["2", "Sales of zero-rated supplies", r(f.salesZero)],
     ["3", "Sales of exempt supplies", r(f.salesExempt)],
-    ["4", "Sales of supplies which are out of scope of GST", r(f.salesOos)],
+    ["4", `Sales of supplies which are out of scope of ${tax}`, r(f.salesOos)],
     ["5", "Total sales (Sum of Boxes 1 to 4)", r(totalSales)],
     ["6", "Output tax", r(f.outputTax)],
     ["7", "Input tax", r(f.inputTax)],
-    ["8", "GST re irrecoverable debts / rate-change credit notes", 0],
-    ["9", "GST collected in excess", 0],
-    ["10", "GST LIABILITY FOR THE PERIOD (Box 6 − Box 7 − Box 8 + Box 9)", r(liability)],
-    ["11", "Amount of GST being paid", r(Math.max(0, liability))],
+    ["8", `${tax} re irrecoverable debts / rate-change credit notes`, 0],
+    ["9", `${tax} collected in excess`, 0],
+    ["10", `${tax} LIABILITY FOR THE PERIOD (Box 6 − Box 7 − Box 8 + Box 9)`, r(liability)],
+    ["11", `Amount of ${tax} being paid`, r(Math.max(0, liability))],
   ];
 }
 
-function exportFilingCsv(f) {
+function exportFilingCsv(f, form) {
+  const { tax = "GGST", mira = "MIRA 205", rate = 8 } = form || {};
   const header = [
-    ["MIRA 205 — GST Return (General Goods and Services)"],
+    [`${mira} — ${tax} Return`],
     ["Taxable period", `${f.periodStart} to ${f.periodEnd}`],
     ["Due date", f.dueDate],
     ["Amounts in Rufiyaa (rounded to the nearest Rufiyaa)"],
     [],
     ["Box", "Description", "Amount (MVR)"],
   ];
-  const rows = header.concat(mira205Boxes(f));
+  const rows = header.concat(miraBoxes(f, rate, tax));
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const a = document.createElement("a");
-  a.href = url; a.download = `MIRA205-${f.periodStart}.csv`;
+  a.href = url; a.download = `${mira.replace(/\s/g, "")}-${f.periodStart}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
 
 function TaxFiling() {
   const w = useW(); const wide = w >= 768;
-  const [filings, setFilings] = useState(FILING_DEMO);
+  const [forms, setForms] = useState(FORMS_DEMO);
+  const [idx, setIdx] = useState(0);
   const [taxpayer, setTaxpayer] = useState({ name: "Kashikeyo Demo Co", tin: "" });
   const [live, setLive] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -1287,17 +1299,25 @@ function TaxFiling() {
     let alive = true;
     getTaxFiling()
       .then((d) => {
-        if (!alive || !d?.filings?.length) return;
-        setFilings(d.filings); setLive(true);
-        if (d.taxpayer) setTaxpayer(d.taxpayer);
+        if (!alive) return;
+        // Prefer the new multi-form shape; fall back to the legacy single list.
+        if (Array.isArray(d?.forms) && d.forms.length) { setForms(d.forms); setLive(true); }
+        else if (d?.filings?.length) {
+          setForms([{ form: "MIRA_205_GGST", tax: "GGST", mira: "MIRA 205", rate: 8, filings: d.filings }]);
+          setLive(true);
+        }
+        if (d?.taxpayer) setTaxpayer(d.taxpayer);
       })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+  const form = forms[Math.min(idx, forms.length - 1)] || forms[0];
+  const filings = form.filings;
+  const canPdf = form.form === "MIRA_205_GGST"; // only the 205 form is bundled
   async function downloadPdf(f) {
     setPdfBusy(true);
     try { await exportFilingPdf(f, taxpayer); }
-    catch { exportFilingCsv(f); } // fall back to CSV if the form can't be filled
+    catch { exportFilingCsv(f, form); } // fall back to CSV if the form can't be filled
     finally { setPdfBusy(false); }
   }
   const current = filings.find((f) => f.status !== "FILED") || filings[filings.length - 1];
@@ -1309,13 +1329,26 @@ function TaxFiling() {
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
       <div className="flex items-center gap-2 mb-4">
-        <Eyebrow>GST filing</Eyebrow>
+        <Eyebrow>Tax filing</Eyebrow>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
           fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
           {live ? "LIVE" : "SAMPLE"}</span>
-        <span style={{ marginLeft: "auto", fontFamily: mono, fontSize: 11, color: T.faint }}>
-          MIRA 205 · GGST 8%</span>
+      </div>
+
+      {/* Form switcher — MIRA 205 (GGST) vs MIRA 206 (TGST) */}
+      <div className="flex items-center gap-1.5 mb-5">
+        {forms.map((fm, i) => {
+          const on = i === Math.min(idx, forms.length - 1);
+          return (
+            <button key={fm.form} onClick={() => setIdx(i)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: mono,
+                fontSize: 11.5, fontWeight: 600, letterSpacing: "0.02em", padding: "7px 13px",
+                borderRadius: 10, cursor: "pointer", border: `1px solid ${on ? T.ink : T.line}`,
+                background: on ? T.ink : T.surface, color: on ? "#fff" : T.muted }}>
+              <CalendarClock size={13} />{fm.mira} · {fm.tax} {fm.rate}%</button>
+          );
+        })}
       </div>
 
       {current && (
@@ -1331,24 +1364,26 @@ function TaxFiling() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => exportFilingCsv(current)}
+              <button onClick={() => exportFilingCsv(current, form)}
                 className="rounded-lg px-3 focus:outline-none transition-colors"
                 style={{ border: `1px solid ${T.line}`, color: T.muted, fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
                 CSV</button>
-              <button onClick={() => downloadPdf(current)} disabled={pdfBusy}
-                className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
-                style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42,
-                  opacity: pdfBusy ? 0.7 : 1 }}>
-                <Download size={15} /> {pdfBusy ? "Filling…" : "Export MIRA 205 (PDF)"}</button>
+              {canPdf && (
+                <button onClick={() => downloadPdf(current)} disabled={pdfBusy}
+                  className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
+                  style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42,
+                    opacity: pdfBusy ? 0.7 : 1 }}>
+                  <Download size={15} /> {pdfBusy ? "Filling…" : "Export MIRA 205 (PDF)"}</button>
+              )}
             </div>
           </div>
           <div className="mt-5">
             <div className="flex items-center justify-between mb-2">
-              <Eyebrow>MIRA 205 · return boxes</Eyebrow>
+              <Eyebrow>{form.mira} · return boxes</Eyebrow>
               <span style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>Rufiyaa (rounded)</span>
             </div>
             <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.line}` }}>
-              {mira205Boxes(current).map(([n, label, amt], i) => {
+              {miraBoxes(current, form.rate, form.tax).map(([n, label, amt], i) => {
                 const hi = n === "10";
                 return (
                   <div key={n} className="flex items-center gap-3 px-3 sm:px-4 py-2.5"

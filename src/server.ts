@@ -368,10 +368,20 @@ const server = createServer(async (req, res) => {
 
     if (method === "GET" && path === "/tax-filing") {
       if (!(await readGuard(req, res))) return;
+      const [taxpayer, ggst, tgst] = await Promise.all([
+        store.taxpayer(),
+        store.listGstFilings(),
+        store.listTgstFilings(),
+      ]);
       return send(res, 200, {
+        taxpayer,
+        forms: [
+          { form: "MIRA_205_GGST", tax: "GGST", mira: "MIRA 205", rate: 8, filings: ggst },
+          { form: "MIRA_206_TGST", tax: "TGST", mira: "MIRA 206", rate: 17, filings: tgst },
+        ],
+        // Legacy fields for older clients that read a single GGST calendar.
         form: "MIRA_205_GGST",
-        taxpayer: await store.taxpayer(),
-        filings: await store.listGstFilings(),
+        filings: ggst,
       });
     }
 
