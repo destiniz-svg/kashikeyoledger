@@ -389,6 +389,10 @@ export class SupabaseStore implements LedgerStore {
       period_end: string;
       due_date: string;
       status: string;
+      sales_8: string | number;
+      sales_zero: string | number;
+      sales_exempt: string | number;
+      sales_oos: string | number;
       output_tax: string | number;
       input_tax: string | number;
       net_payable: string | number;
@@ -400,6 +404,10 @@ export class SupabaseStore implements LedgerStore {
       periodEnd: r.period_end,
       dueDate: r.due_date,
       status: r.status,
+      sales8: Number(r.sales_8),
+      salesZero: Number(r.sales_zero),
+      salesExempt: Number(r.sales_exempt),
+      salesOos: Number(r.sales_oos),
       outputTax: Number(r.output_tax),
       inputTax: Number(r.input_tax),
       netPayable: Number(r.net_payable),
