@@ -205,6 +205,18 @@ test("the in-memory store has no auth provider (verifyMember is always false)", 
   assert.equal(await new MemoryStore().verifyMember("any-token"), false);
 });
 
+test("listItems values stock and flags low/out status", async () => {
+  const items = await new MemoryStore().listItems();
+  assert.equal(items.length, 8);
+  const sand = items.find((i) => i.sku === "SND-M3");
+  assert.equal(sand?.status, "out"); // qty 0
+  const pvc = items.find((i) => i.sku === "PVC-04");
+  assert.equal(pvc?.status, "low"); // 8 <= 20
+  const cem = items.find((i) => i.sku === "CEM-50");
+  assert.equal(cem?.status, "in_stock");
+  assert.equal(cem?.stockValue, 11400); // 120 * 95
+});
+
 test("listGstFilings returns a GGST calendar with net = output - input", async () => {
   const filings = await new MemoryStore().listGstFilings();
   assert.ok(filings.length >= 1);

@@ -45,5 +45,6 @@ export const getBills = () => get("/bills");
 export const getVendors = () => get("/vendors");
 export const getTaxFiling = () => get("/tax-filing");
 export const getReports = () => get("/reports");
+export const getInventory = () => get("/inventory");
 export const approveBill = (id) => post(`/bills/${encodeURIComponent(id)}/approve`);
 export const rejectBill = (id) => post(`/bills/${encodeURIComponent(id)}/reject`);

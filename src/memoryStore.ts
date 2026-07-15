@@ -17,6 +17,8 @@ import {
   type LedgerStore,
   type RevenueSummary,
   type GstFilingRow,
+  type ItemRow,
+  itemStatus,
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
@@ -202,6 +204,32 @@ export class MemoryStore implements LedgerStore {
 
   async taxpayer(): Promise<{ name: string; tin: string }> {
     return { name: "Kashikeyo Demo Co", tin: "" };
+  }
+
+  async listItems(): Promise<ItemRow[]> {
+    const demo = [
+      ["MIX-01", "Concrete Mixer (50KG)", "unit", 3, 91000, 2],
+      ["CEM-50", "Cement (50kg bag)", "bag", 120, 95, 40],
+      ["RBR-12", "Steel Rebar 12mm", "length", 30, 180, 50],
+      ["PVC-04", 'PVC Pipe 4"', "length", 8, 120, 20],
+      ["WTR-500", "Bottled Water 500ml", "case", 60, 22, 24],
+      ["FIX-AST", "Assorted fixings & tools", "set", 12, 358.33, 5],
+      ["SND-M3", "Sand", "m3", 0, 450, 10],
+      ["GRV-M3", "Gravel", "m3", 15, 520, 8],
+    ] as const;
+    return demo
+      .map(([sku, name, unit, qty, cost, threshold]) => ({
+        id: `item-${sku}`,
+        sku,
+        name,
+        unit,
+        qtyOnHand: qty,
+        avgCost: cost,
+        stockValue: Math.round(qty * cost * 100) / 100,
+        threshold,
+        status: itemStatus(qty, threshold),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async listVendors(): Promise<VendorRow[]> {
