@@ -137,14 +137,19 @@ const Eyebrow = ({ children, style }) => (
     textTransform: "uppercase", color: T.faint, ...style }}>{children}</div>
 );
 
+// Prettify an unmapped enum value ("AI_VERIFIED" -> "Ai verified") so an
+// unexpected status/category degrades to a readable chip instead of crashing.
+const prettyEnum = (v) => String(v ?? "—").toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+const NEUTRAL_CHIP = { bg: "#EEF1EF", fg: T.muted };
 const STATUS = {
   DRAFT: { t: "Draft", bg: "#EEF1EF", fg: T.muted },
   AI_VERIFIED: { t: "AI verified", bg: T.tealSoft, fg: T.teal },
   ACCOUNTANT_APPROVED: { t: "Approved", bg: T.claimSoft, fg: T.claim },
+  REJECTED: { t: "Rejected", bg: T.exemptSoft, fg: T.exempt },
   SYNCED: { t: "Synced", bg: T.goldSoft, fg: T.warn },
 };
 const StatusPill = ({ s }) => {
-  const x = STATUS[s];
+  const x = STATUS[s] || { ...NEUTRAL_CHIP, t: prettyEnum(s) };
   return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
     padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
 };
@@ -154,9 +159,10 @@ const TAXCAT = {
   TGST: { t: "TGST 17%", bg: T.goldSoft, fg: T.warn },
   ZERO_RATED: { t: "Zero-rated", bg: T.claimSoft, fg: T.claim },
   EXEMPT: { t: "Exempt", bg: T.exemptSoft, fg: T.exempt },
+  OUT_OF_SCOPE: { t: "Out of scope", bg: "#EEF1EF", fg: T.muted },
 };
 const TaxChip = ({ c }) => {
-  const x = TAXCAT[c];
+  const x = TAXCAT[c] || { ...NEUTRAL_CHIP, t: prettyEnum(c) };
   return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
     padding: "3px 8px", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
 };
