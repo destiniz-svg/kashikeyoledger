@@ -53,6 +53,7 @@ export const getReports = () => get("/reports");
 export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
 export const getSettings = () => get("/settings");
+export const getTransactions = () => get("/transactions");
 const bankAction = (id, action) => post(`/banking/${encodeURIComponent(id)}/${action}`);
 export const confirmBankTxn = (id, vendorId) =>
   post(`/banking/${encodeURIComponent(id)}/confirm`, vendorId ? { vendorId } : undefined);

@@ -8,7 +8,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { authorizeRead, authorizeWrite, extractApiKey } from "./auth.ts";
 import { createStore } from "./createStore.ts";
-import { StoreError, type EntryInput, type SaleInput } from "./store.ts";
+import { StoreError, formatBillDate, type EntryInput, type SaleInput } from "./store.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
@@ -145,6 +145,7 @@ const server = createServer(async (req, res) => {
           "GET /banking  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
+          "GET /transactions  [read]",
           "GET /settings  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
@@ -333,6 +334,63 @@ const server = createServer(async (req, res) => {
           matched: byStatus.MATCHED,
           excluded: byStatus.EXCLUDED,
           unreconciled: byStatus.UNMATCHED + byStatus.SUGGESTED,
+        },
+      });
+    }
+
+    if (method === "GET" && path === "/transactions") {
+      if (!(await readGuard(req, res))) return;
+      const [bills, sales] = await Promise.all([store.listBills(), store.listSales()]);
+      // Parse a display date ("05 Jul 2026") back to ISO for chronological sort.
+      const toIso = (s: string): string => {
+        const [d, mon, y] = s.split(" ");
+        const mi = DASH_MONTHS.indexOf(mon);
+        if (!d || mi < 0 || !y) return "";
+        return `${y}-${String(mi + 1).padStart(2, "0")}-${d.padStart(2, "0")}`;
+      };
+      const billTxns = bills.map((b) => ({
+        id: b.id,
+        kind: "BILL",
+        isoDate: toIso(b.date),
+        date: b.date,
+        party: b.vendor,
+        reference: b.invoice,
+        category: b.cat || "—",
+        taxCat: b.taxCat,
+        direction: "out",
+        amount: b.total,
+        currency: b.cur,
+        status: b.status,
+      }));
+      const saleTxns = sales.map((s) => ({
+        id: s.id,
+        kind: "SALE",
+        isoDate: s.date,
+        date: formatBillDate(s.date),
+        party: "POS sale",
+        reference: s.id.slice(0, 8),
+        category: "Sales",
+        taxCat: s.lines[0]?.taxCategory ?? "—",
+        direction: "in",
+        amount: s.grandTotal,
+        currency: s.currency,
+        status: s.status,
+      }));
+      const transactions = [...billTxns, ...saleTxns].sort((a, b) =>
+        b.isoDate.localeCompare(a.isoDate),
+      );
+      const moneyIn = round2(saleTxns.reduce((n, t) => n + t.amount, 0));
+      const moneyOut = round2(billTxns.reduce((n, t) => n + t.amount, 0));
+      return send(res, 200, {
+        currency: "MVR",
+        transactions,
+        summary: {
+          count: transactions.length,
+          bills: billTxns.length,
+          sales: saleTxns.length,
+          moneyIn,
+          moneyOut,
+          net: round2(moneyIn - moneyOut),
         },
       });
     }
