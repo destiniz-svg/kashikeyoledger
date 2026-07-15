@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MemoryStore } from "../src/memoryStore.ts";
-import { StoreError, agingBucket, bankTxnSigned, computeSale, formatBillDate, validateEntry } from "../src/store.ts";
+import { StoreError, agingBucket, bankTxnSigned, computeSale, formatBillDate, nameInitials, validateEntry } from "../src/store.ts";
 
 test("a balanced entry posts and updates the trial balance", async () => {
   const s = new MemoryStore();
@@ -341,6 +341,30 @@ test("importStatement validates lines and the target account", async () => {
     () => s.importStatement("ba-mvr", "BOGUS", [{ date: "2026-07-15", direction: "DEBIT", amount: 5 }] as never),
     /Unsupported statement source/,
   );
+});
+
+test("nameInitials uses the name, then falls back to the email local-part", () => {
+  assert.equal(nameInitials("Aisha Mohamed"), "AM");
+  assert.equal(nameInitials("", "owner@kashikeyo.local"), "OW");
+  assert.equal(nameInitials("", "jane.doe@x.com"), "JD");
+  assert.equal(nameInitials("Solo"), "SO");
+});
+
+test("orgSettings returns the org profile and tax registration", async () => {
+  const s = await new MemoryStore().orgSettings();
+  assert.equal(s.name, "Kashikeyo Demo Co");
+  assert.equal(s.baseCurrency, "MVR");
+  assert.equal(s.gstRegistered, true);
+  assert.equal(s.gstFilingFrequency, "MONTHLY");
+  assert.equal(s.fiscalYearStartMonth, 1);
+});
+
+test("listMembers returns members with role and initials", async () => {
+  const members = await new MemoryStore().listMembers();
+  assert.ok(members.length >= 1);
+  const owner = members.find((m) => m.role === "OWNER");
+  assert.equal(owner?.email, "owner@kashikeyo.local");
+  assert.equal(owner?.ini, "OW");
 });
 
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
