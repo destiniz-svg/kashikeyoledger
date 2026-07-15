@@ -297,6 +297,7 @@ const server = createServer(async (req, res) => {
       if (!(await readGuard(req, res))) return;
       return send(res, 200, {
         form: "MIRA_205_GGST",
+        taxpayer: await store.taxpayer(),
         filings: await store.listGstFilings(),
       });
     }

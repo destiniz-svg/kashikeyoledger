@@ -414,6 +414,14 @@ export class SupabaseStore implements LedgerStore {
     }));
   }
 
+  async taxpayer(): Promise<{ name: string; tin: string }> {
+    const rows = (await this.#request(
+      `/rest/v1/organizations?id=eq.${this.org}&select=name,tin`,
+    )) as { name: string; tin: string | null }[];
+    const org = rows[0];
+    return { name: org?.name ?? "", tin: org?.tin ?? "" };
+  }
+
   async verifyMember(token: string): Promise<boolean> {
     const cachedExp = this.#authCache.get(token);
     if (cachedExp && cachedExp > Date.now()) return true;

@@ -200,6 +200,10 @@ export class MemoryStore implements LedgerStore {
     return DEMO_FILINGS.map((f) => ({ ...f }));
   }
 
+  async taxpayer(): Promise<{ name: string; tin: string }> {
+    return { name: "Kashikeyo Demo Co", tin: "" };
+  }
+
   async listVendors(): Promise<VendorRow[]> {
     const map = new Map<string, { tin: string; totalSpend: number; billCount: number; lastBillDate: string }>();
     for (const b of this.#bills) {

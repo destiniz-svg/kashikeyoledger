@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { getDashboard, getBills, getVendors, getTaxFiling, approveBill, rejectBill, API_BASE } from "./api.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
+import { exportFilingPdf } from "./mira205.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -1278,14 +1279,26 @@ function exportFilingCsv(f) {
 function TaxFiling() {
   const w = useW(); const wide = w >= 768;
   const [filings, setFilings] = useState(FILING_DEMO);
+  const [taxpayer, setTaxpayer] = useState({ name: "Kashikeyo Demo Co", tin: "" });
   const [live, setLive] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   useEffect(() => {
     let alive = true;
     getTaxFiling()
-      .then((d) => { if (alive && d?.filings?.length) { setFilings(d.filings); setLive(true); } })
+      .then((d) => {
+        if (!alive || !d?.filings?.length) return;
+        setFilings(d.filings); setLive(true);
+        if (d.taxpayer) setTaxpayer(d.taxpayer);
+      })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+  async function downloadPdf(f) {
+    setPdfBusy(true);
+    try { await exportFilingPdf(f, taxpayer); }
+    catch { exportFilingCsv(f); } // fall back to CSV if the form can't be filled
+    finally { setPdfBusy(false); }
+  }
   const current = filings.find((f) => f.status !== "FILED") || filings[filings.length - 1];
   const daysToDue = current
     ? Math.ceil((Date.parse(`${current.dueDate}T00:00:00Z`) - Date.now()) / 86_400_000)
@@ -1316,10 +1329,17 @@ function TaxFiling() {
                   {daysToDue >= 0 ? ` · in ${daysToDue} days` : ` · ${-daysToDue} days overdue`}</span>
               </div>
             </div>
-            <button onClick={() => exportFilingCsv(current)}
-              className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
-              style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
-              <Download size={15} /> Export MIRA 205 (CSV)</button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => exportFilingCsv(current)}
+                className="rounded-lg px-3 focus:outline-none transition-colors"
+                style={{ border: `1px solid ${T.line}`, color: T.muted, fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
+                CSV</button>
+              <button onClick={() => downloadPdf(current)} disabled={pdfBusy}
+                className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
+                style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42,
+                  opacity: pdfBusy ? 0.7 : 1 }}>
+                <Download size={15} /> {pdfBusy ? "Filling…" : "Export MIRA 205 (PDF)"}</button>
+            </div>
           </div>
           <div className="mt-5">
             <div className="flex items-center justify-between mb-2">
