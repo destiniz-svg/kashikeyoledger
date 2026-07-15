@@ -5,11 +5,13 @@
  */
 import {
   StoreError,
+  STATEMENT_SOURCES,
   agingBucket,
   assertReconStatus,
   bankTxnSigned,
   computeSale,
   formatBillDate,
+  normalizeImportLines,
   toMinor,
   validateEntry,
   vendorInitials,
@@ -17,6 +19,8 @@ import {
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type ImportLineInput,
+  type ImportResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -302,6 +306,53 @@ export class MemoryStore implements LedgerStore {
     if (status === "MATCHED") txn.matchedVendor = vendorId ?? txn.matchedVendor;
     else if (status === "UNMATCHED") txn.matchedVendor = null;
     return { id: txnId, reconStatus: status };
+  }
+
+  async importStatement(
+    bankAccountId: string,
+    source: string,
+    lines: ImportLineInput[],
+  ): Promise<ImportResult> {
+    if (!(STATEMENT_SOURCES as readonly string[]).includes(source)) {
+      throw new StoreError(`Unsupported statement source "${source}"`);
+    }
+    const acct = DEMO_BANK_ACCOUNTS.find((a) => a.id === bankAccountId);
+    if (!acct) throw new StoreError(`Bank account "${bankAccountId}" not found`, 404);
+    const clean = normalizeImportLines(lines);
+    // Dedupe key mirrors the SQL content hash, scoped to the account.
+    const keyOf = (ref: string, date: string, dir: string, amt: number, narr: string, cp: string) =>
+      [ref, date, dir, amt, narr, cp].join("|");
+    const seen = new Set(
+      this.#bankTxns
+        .filter((t) => t.accountId === bankAccountId)
+        .map((t) => keyOf(t.reference ?? "", t.isoDate, t.direction, t.amt, t.narrative ?? "", t.counterparty ?? "")),
+    );
+    let imported = 0;
+    let duplicates = 0;
+    for (const l of clean) {
+      const key = keyOf(l.reference ?? "", l.date, l.direction, l.amount, l.narrative ?? "", l.counterparty ?? "");
+      if (seen.has(key)) {
+        duplicates += 1;
+        continue;
+      }
+      seen.add(key);
+      this.#bankTxns.push({
+        id: `imp-${++this.#idSeq}`,
+        accountId: bankAccountId,
+        isoDate: l.date,
+        type: l.type ?? "",
+        reference: l.reference ?? "",
+        counterparty: l.counterparty ?? "",
+        narrative: l.narrative ?? "",
+        direction: l.direction,
+        amt: l.amount,
+        currency: acct.currency,
+        reconStatus: "UNMATCHED",
+        matchedVendor: null,
+      });
+      imported += 1;
+    }
+    return { importId: `import-${++this.#idSeq}`, imported, duplicates, total: clean.length };
   }
 
   async listVendors(): Promise<VendorRow[]> {

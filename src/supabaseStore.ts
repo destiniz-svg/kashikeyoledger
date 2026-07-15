@@ -14,11 +14,14 @@ import {
   assertReconStatus,
   bankTxnSigned,
   formatBillDate,
+  normalizeImportLines,
   vendorInitials,
   type AccountRow,
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type ImportLineInput,
+  type ImportResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -514,6 +517,35 @@ export class SupabaseStore implements LedgerStore {
       }),
     })) as string;
     return { id: txnId, reconStatus: result };
+  }
+
+  async importStatement(
+    bankAccountId: string,
+    source: string,
+    lines: ImportLineInput[],
+  ): Promise<ImportResult> {
+    const clean = normalizeImportLines(lines);
+    const rows = (await this.#request("/rest/v1/rpc/import_bank_statement", {
+      method: "POST",
+      body: JSON.stringify({
+        p_org: this.org,
+        p_account: bankAccountId,
+        p_source: source,
+        p_lines: clean,
+      }),
+    })) as {
+      import_id: string;
+      imported: string | number;
+      duplicates: string | number;
+      total: string | number;
+    }[];
+    const r = rows[0] ?? { import_id: null, imported: 0, duplicates: 0, total: clean.length };
+    return {
+      importId: r.import_id ?? null,
+      imported: Number(r.imported),
+      duplicates: Number(r.duplicates),
+      total: Number(r.total),
+    };
   }
 
   async listGstFilings(): Promise<GstFilingRow[]> {

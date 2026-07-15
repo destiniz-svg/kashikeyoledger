@@ -386,3 +386,90 @@ end;
 $$;
 
 grant execute on function public.set_bank_recon(uuid, uuid, text, uuid) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Statement import (migration kashikeyo_ledger_import_bank_statement_fn)
+-- ---------------------------------------------------------------------------
+
+-- Ingest parsed statement lines into bank_transactions, deduplicating on
+-- (bank_account_id, dedupe_hash) so re-importing the same statement is a no-op.
+-- Records the batch in bank_statement_imports and returns the counts.
+create or replace function public.import_bank_statement(
+  p_org uuid,
+  p_account uuid,
+  p_source text,
+  p_lines jsonb
+) returns table(import_id uuid, imported int, duplicates int, total int)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_import uuid;
+  v_total int;
+  v_imported int := 0;
+  v_dupes int := 0;
+  v_min date; v_max date;
+  v_cur char(3);
+  r jsonb;
+  v_date date; v_vdate date; v_dir bank_txn_direction; v_amount numeric; v_hash text;
+begin
+  if not exists (select 1 from bank_accounts where id = p_account and organization_id = p_org) then
+    raise exception 'bank account % not found for this organization', p_account;
+  end if;
+  if p_source not in ('CSV_UPLOAD', 'PDF_UPLOAD', 'BANK_FEED') then
+    raise exception 'unsupported statement source %', p_source;
+  end if;
+
+  v_total := coalesce(jsonb_array_length(p_lines), 0);
+  if v_total = 0 then
+    raise exception 'no statement lines to import';
+  end if;
+
+  select currency into v_cur from bank_accounts where id = p_account;
+
+  insert into bank_statement_imports (organization_id, bank_account_id, source, row_count, duplicate_rows)
+  values (p_org, p_account, p_source::statement_source, 0, 0)
+  returning id into v_import;
+
+  for r in select value from jsonb_array_elements(p_lines)
+  loop
+    v_date := (r->>'date')::date;
+    v_vdate := nullif(r->>'valueDate', '')::date;
+    v_dir := (r->>'direction')::bank_txn_direction;
+    v_amount := (r->>'amount')::numeric;
+    -- Content hash: same statement re-imported yields the same hashes -> skipped.
+    v_hash := md5(
+      coalesce(r->>'reference', '') || '|' || v_date::text || '|' || v_dir::text || '|' ||
+      v_amount::text || '|' || coalesce(r->>'narrative', '') || '|' || coalesce(r->>'counterparty', ''));
+
+    insert into bank_transactions
+      (organization_id, bank_account_id, import_id, txn_date, value_date, txn_type,
+       bank_reference, counterparty, narrative, direction, amount, running_balance,
+       currency, dedupe_hash, recon_status)
+    values
+      (p_org, p_account, v_import, v_date, v_vdate, nullif(r->>'type', ''),
+       nullif(r->>'reference', ''), nullif(r->>'counterparty', ''), nullif(r->>'narrative', ''),
+       v_dir, v_amount, nullif(r->>'balance', '')::numeric,
+       v_cur, v_hash, 'UNMATCHED')
+    on conflict (bank_account_id, dedupe_hash) do nothing;
+
+    if found then
+      v_imported := v_imported + 1;
+      if v_min is null or v_date < v_min then v_min := v_date; end if;
+      if v_max is null or v_date > v_max then v_max := v_date; end if;
+    else
+      v_dupes := v_dupes + 1;
+    end if;
+  end loop;
+
+  update bank_statement_imports
+     set row_count = v_imported, duplicate_rows = v_dupes,
+         period_start = v_min, period_end = v_max
+   where id = v_import;
+
+  return query select v_import, v_imported, v_dupes, v_total;
+end;
+$$;
+
+grant execute on function public.import_bank_statement(uuid, uuid, text, jsonb) to authenticated, service_role;

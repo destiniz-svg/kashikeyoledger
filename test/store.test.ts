@@ -300,6 +300,49 @@ test("setBankRecon rejects an unknown status and an unknown line", async () => {
   await assert.rejects(() => s.setBankRecon("nope", "MATCHED"), /not found/);
 });
 
+test("importStatement adds new lines and dedupes on re-import", async () => {
+  const s = new MemoryStore();
+  const lines = [
+    { date: "2026-07-15", direction: "DEBIT", amount: 500, reference: "IMP-A", narrative: "A" },
+    { date: "2026-07-16", direction: "CREDIT", amount: 900, reference: "IMP-B", narrative: "B" },
+  ];
+  const before = (await s.listBankTransactions()).length;
+  const first = await s.importStatement("ba-mvr", "CSV_UPLOAD", lines as never);
+  assert.deepEqual({ imported: first.imported, duplicates: first.duplicates, total: first.total },
+    { imported: 2, duplicates: 0, total: 2 });
+  assert.equal((await s.listBankTransactions()).length, before + 2);
+  // Re-importing the same statement adds nothing.
+  const second = await s.importStatement("ba-mvr", "CSV_UPLOAD", lines as never);
+  assert.deepEqual({ imported: second.imported, duplicates: second.duplicates },
+    { imported: 0, duplicates: 2 });
+  assert.equal((await s.listBankTransactions()).length, before + 2);
+  // Imported lines land as UNMATCHED on the target account.
+  const imp = (await s.listBankTransactions()).find((t) => t.reference === "IMP-A");
+  assert.equal(imp?.reconStatus, "UNMATCHED");
+  assert.equal(imp?.amount, -500); // DEBIT is negative
+});
+
+test("importStatement validates lines and the target account", async () => {
+  const s = new MemoryStore();
+  await assert.rejects(() => s.importStatement("ba-mvr", "CSV_UPLOAD", []), /No statement lines/);
+  await assert.rejects(
+    () => s.importStatement("ba-mvr", "CSV_UPLOAD", [{ date: "bad", direction: "DEBIT", amount: 5 }] as never),
+    /date must be ISO/,
+  );
+  await assert.rejects(
+    () => s.importStatement("ba-mvr", "CSV_UPLOAD", [{ date: "2026-07-15", direction: "SIDEWAYS", amount: 5 }] as never),
+    /direction must be DEBIT or CREDIT/,
+  );
+  await assert.rejects(
+    () => s.importStatement("nope", "CSV_UPLOAD", [{ date: "2026-07-15", direction: "DEBIT", amount: 5 }] as never),
+    /not found/,
+  );
+  await assert.rejects(
+    () => s.importStatement("ba-mvr", "BOGUS", [{ date: "2026-07-15", direction: "DEBIT", amount: 5 }] as never),
+    /Unsupported statement source/,
+  );
+});
+
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
   const s = new MemoryStore();
   await s.recordSale({
