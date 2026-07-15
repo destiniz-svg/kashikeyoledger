@@ -1228,22 +1228,45 @@ const FilingChip = ({ s }) => {
   return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
     padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
 };
+const F0 = { sales8: 0, salesZero: 0, salesExempt: 0, salesOos: 0 };
 const FILING_DEMO = [
-  { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
-  { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
-  { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", outputTax: 6, inputTax: 7280, netPayable: -7274 },
-  { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", ...F0, outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
+  { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", ...F0, outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
+  { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", ...F0, sales8: 81, outputTax: 6, inputTax: 7280, netPayable: -7274 },
+  { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", ...F0, outputTax: 0, inputTax: 0, netPayable: 0 },
 ];
 
-function exportFilingCsv(f) {
-  const rows = [
-    ["MIRA 205 — GGST return"],
-    ["Period", `${f.periodStart} to ${f.periodEnd}`],
-    ["Due date", f.dueDate],
-    ["Output tax (GGST on sales)", f.outputTax.toFixed(2)],
-    ["Input tax (claimable GGST)", f.inputTax.toFixed(2)],
-    ["Net GST payable", f.netPayable.toFixed(2)],
+// MIRA 205 boxes for a filing period. Amounts are rounded to the nearest
+// Rufiyaa, matching the official return.
+function mira205Boxes(f) {
+  const r = (n) => Math.round(n);
+  const totalSales = f.sales8 + f.salesZero + f.salesExempt + f.salesOos;
+  const liability = f.outputTax - f.inputTax; // Box 6 − Box 7 (Box 8 = Box 9 = 0)
+  return [
+    ["1", "Sales of supplies subject to GST at 8% (inclusive of GST)", r(f.sales8)],
+    ["2", "Sales of zero-rated supplies", r(f.salesZero)],
+    ["3", "Sales of exempt supplies", r(f.salesExempt)],
+    ["4", "Sales of supplies which are out of scope of GST", r(f.salesOos)],
+    ["5", "Total sales (Sum of Boxes 1 to 4)", r(totalSales)],
+    ["6", "Output tax", r(f.outputTax)],
+    ["7", "Input tax", r(f.inputTax)],
+    ["8", "GST re irrecoverable debts / rate-change credit notes", 0],
+    ["9", "GST collected in excess", 0],
+    ["10", "GST LIABILITY FOR THE PERIOD (Box 6 − Box 7 − Box 8 + Box 9)", r(liability)],
+    ["11", "Amount of GST being paid", r(Math.max(0, liability))],
   ];
+}
+
+function exportFilingCsv(f) {
+  const header = [
+    ["MIRA 205 — GST Return (General Goods and Services)"],
+    ["Taxable period", `${f.periodStart} to ${f.periodEnd}`],
+    ["Due date", f.dueDate],
+    ["Amounts in Rufiyaa (rounded to the nearest Rufiyaa)"],
+    [],
+    ["Box", "Description", "Amount (MVR)"],
+  ];
+  const rows = header.concat(mira205Boxes(f));
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const a = document.createElement("a");
@@ -1298,27 +1321,35 @@ function TaxFiling() {
               style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
               <Download size={15} /> Export MIRA 205 (CSV)</button>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
-            <div className="rounded-xl p-4" style={{ background: T.paper }}>
-              <Eyebrow>Output tax</Eyebrow>
-              <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.text, marginTop: 5 }}>
-                {fmt(current.outputTax)}</div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>GGST charged on sales</div>
+          <div className="mt-5">
+            <div className="flex items-center justify-between mb-2">
+              <Eyebrow>MIRA 205 · return boxes</Eyebrow>
+              <span style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>Rufiyaa (rounded)</span>
             </div>
-            <div className="rounded-xl p-4" style={{ background: T.paper }}>
-              <Eyebrow>Input tax</Eyebrow>
-              <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.claim, marginTop: 5 }}>
-                {fmt(current.inputTax)}</div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>claimable GGST on bills</div>
+            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.line}` }}>
+              {mira205Boxes(current).map(([n, label, amt], i) => {
+                const hi = n === "10";
+                return (
+                  <div key={n} className="flex items-center gap-3 px-3 sm:px-4 py-2.5"
+                    style={{ borderTop: i ? `1px solid ${T.line2}` : "none",
+                      background: hi ? (payable ? T.warnSoft : T.claimSoft) : T.surface }}>
+                    <span style={{ width: 20, height: 20, borderRadius: 999, flexShrink: 0,
+                      background: hi ? (payable ? T.warn : T.claim) : T.line2,
+                      color: hi ? "#fff" : T.muted, display: "grid", placeItems: "center",
+                      fontFamily: mono, fontSize: 10, fontWeight: 700 }}>{n}</span>
+                    <span style={{ flex: 1, fontSize: 12.5, color: T.text,
+                      fontWeight: hi ? 650 : 450 }}>{label}</span>
+                    <span style={{ ...num, fontSize: 13, fontWeight: hi ? 700 : 600, whiteSpace: "nowrap",
+                      color: hi ? (payable ? T.warn : T.claim) : T.text }}>
+                      {Number(amt).toLocaleString("en-US")}</span>
+                  </div>
+                );
+              })}
             </div>
-            <div className="rounded-xl p-4" style={{ background: payable ? T.warnSoft : T.claimSoft,
-              border: `1px solid ${payable ? "#E7D3A6" : "#BFE0D2"}` }}>
-              <Eyebrow style={{ color: payable ? T.warn : T.claim }}>
-                {payable ? "Net payable" : "Net credit / refund"}</Eyebrow>
-              <div style={{ ...num, fontSize: 20, fontWeight: 680, marginTop: 5,
-                color: payable ? T.warn : T.claim }}>{fmt(Math.abs(current.netPayable))}</div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>output − input tax</div>
-            </div>
+            {!payable && current.netPayable !== 0 && (
+              <div style={{ fontSize: 11, color: T.claim, marginTop: 6 }}>
+                Box 10 is negative — a net input-tax credit carried to the next period.</div>
+            )}
           </div>
         </div>
       )}

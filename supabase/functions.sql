@@ -287,14 +287,16 @@ $$;
 grant execute on function public.org_vendors(uuid) to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- GST filing (migration kashikeyo_ledger_org_gst_filings_fn)
+-- GST filing (migration kashikeyo_ledger_org_gst_filings_boxes)
 -- ---------------------------------------------------------------------------
 
--- MIRA 205 (GGST) filing periods with computed output tax (from POS sales),
--- claimable input tax (from purchase bills), and net GST payable.
-create or replace function public.org_gst_filings(p_org uuid)
+-- MIRA 205 (GGST) filing periods with the return boxes computed from POS sales
+-- (GST-inclusive) and claimable input tax from purchase bills.
+drop function if exists public.org_gst_filings(uuid);
+create function public.org_gst_filings(p_org uuid)
 returns table(
   id uuid, form text, period_start date, period_end date, due_date date, status text,
+  sales_8 numeric, sales_zero numeric, sales_exempt numeric, sales_oos numeric,
   output_tax numeric, input_tax numeric, net_payable numeric
 )
 language sql
@@ -302,18 +304,26 @@ security definer
 set search_path = public
 as $$
   select fp.id, fp.form::text, fp.period_start, fp.period_end, fp.due_date, fp.status::text,
-         coalesce(o.tax, 0) as output_tax,
-         coalesce(i.tax, 0) as input_tax,
-         coalesce(o.tax, 0) - coalesce(i.tax, 0) as net_payable
+         coalesce(s.sales_8, 0)      as sales_8,
+         coalesce(s.sales_zero, 0)   as sales_zero,
+         coalesce(s.sales_exempt, 0) as sales_exempt,
+         coalesce(s.sales_oos, 0)    as sales_oos,
+         coalesce(s.output_tax, 0)   as output_tax,
+         coalesce(i.tax, 0)          as input_tax,
+         coalesce(s.output_tax, 0) - coalesce(i.tax, 0) as net_payable
   from filing_periods fp
   left join lateral (
-    select sum(li.tax_amount) as tax
+    select
+      sum(case when li.tax_category = 'GGST' then li.line_subtotal + li.tax_amount else 0 end) as sales_8,
+      sum(case when li.tax_category = 'ZERO_RATED' then li.line_subtotal else 0 end) as sales_zero,
+      sum(case when li.tax_category = 'EXEMPT' then li.line_subtotal else 0 end) as sales_exempt,
+      sum(case when li.tax_category = 'OUT_OF_SCOPE' then li.line_subtotal else 0 end) as sales_oos,
+      sum(case when li.tax_category = 'GGST' then li.tax_amount else 0 end) as output_tax
     from transactions t
     join transaction_line_items li on li.transaction_id = t.id
     where t.organization_id = p_org and t.type = 'POS_SALE'
-      and li.tax_category = 'GGST'
       and t.transaction_date between fp.period_start and fp.period_end
-  ) o on true
+  ) s on true
   left join lateral (
     select sum(li.tax_amount) as tax
     from transactions t

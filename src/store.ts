@@ -117,7 +117,7 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
-/** A GGST (MIRA 205) filing period with computed tax figures. */
+/** A GGST (MIRA 205) filing period with the return boxes computed. */
 export interface GstFilingRow {
   id: string;
   form: string;
@@ -125,9 +125,13 @@ export interface GstFilingRow {
   periodEnd: string;
   dueDate: string;
   status: string;
-  outputTax: number;
-  inputTax: number;
-  netPayable: number;
+  sales8: number; // Box 1 — sales at 8% (GST-inclusive)
+  salesZero: number; // Box 2 — zero-rated
+  salesExempt: number; // Box 3 — exempt
+  salesOos: number; // Box 4 — out of scope
+  outputTax: number; // Box 6
+  inputTax: number; // Box 7
+  netPayable: number; // Box 10 = Box 6 − Box 7
 }
 
 /** A vendor with spend rollups, shaped for the Vendors screen. */
