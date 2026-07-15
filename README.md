@@ -51,9 +51,9 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /health`        | Health check (used by the deploy platform); reports `backend` |
 | `GET /`              | Service info, endpoint list, and `outOfBalanceBy`             |
 | `GET /accounts`      | List the chart of accounts                                    |
-| `POST /accounts`     | Create an account `{ code, name, accountType }`               |
+| `POST /accounts` 🔒  | Create an account `{ code, name, accountType }` (requires API key) |
 | `GET /entries`       | List journal entries with their lines                         |
-| `POST /entries`      | Post an entry `{ date, memo, lines: [{ accountCode, debit?, credit? }] }` |
+| `POST /entries` 🔒   | Post an entry `{ date, memo, lines: [{ accountCode, debit?, credit? }] }` (requires API key) |
 | `GET /trial-balance` | Trial balance (per-account debit/credit + net balance)        |
 
 Example — post a balanced entry:
@@ -85,12 +85,35 @@ Environment variables (see [`.env.example`](.env.example)):
 | `SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — a **secret**; set it in the host's env, never commit it |
 | `KASHIKEYO_ORG_ID` | The `organizations.id` this service operates on |
+| `KASHIKEYO_API_KEY` | API key required for write requests (see [Write authentication](#write-authentication)) |
 | `PORT` | Provided by the host (Railway); defaults to `3000` |
 
 The service authenticates to Supabase as a trusted backend with the
 service-role key (bypassing RLS) and scopes every query to `KASHIKEYO_ORG_ID`.
 Writes go through the `post_journal_entry` SQL function so the multi-row insert
 is atomic and balance-checked in the database.
+
+## Write authentication
+
+Mutating requests (`POST /accounts`, `POST /entries`) require an API key; reads
+are open. Set `KASHIKEYO_API_KEY` and send it on writes as either header:
+
+```bash
+curl -X POST "$BASE_URL/entries" \
+  -H "X-API-Key: $KASHIKEYO_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "date": "2026-07-02", "memo": "...", "lines": [ ... ] }'
+# or:  -H "Authorization: Bearer $KASHIKEYO_API_KEY"
+```
+
+Responses: `401` if no key is presented, `403` if it is wrong, and `503` if the
+server has **no key configured** — writes are fail-closed, so an unset
+`KASHIKEYO_API_KEY` rejects all writes rather than leaving them open. Keys are
+compared in constant time. Generate one with:
+
+```bash
+node -e "console.log('sk_'+require('crypto').randomBytes(24).toString('hex'))"
+```
 
 ### Library example
 
@@ -125,6 +148,7 @@ See [`src/demo.ts`](src/demo.ts) for a fuller worked example.
 | `src/supabaseStore.ts`| Supabase-backed store (real schema, via PostgREST + RPC)   |
 | `src/memoryStore.ts`  | In-memory store (local dev / tests)                        |
 | `src/createStore.ts`  | Picks the backend from environment variables               |
+| `src/auth.ts`         | API-key authentication for write requests                  |
 | `src/ledger.ts`       | Pure in-memory double-entry engine (library)               |
 | `src/money.ts`        | Integer minor-unit money helpers (library)                 |
 | `src/demo.ts`         | Runnable worked example of the library                     |
@@ -145,6 +169,7 @@ dependencies, Railway just installs and starts the service.
    - `SUPABASE_URL` — your project URL
    - `SUPABASE_SERVICE_ROLE_KEY` — your service-role key (secret)
    - `KASHIKEYO_ORG_ID` — the organization id to operate on
+   - `KASHIKEYO_API_KEY` — API key for write requests (secret)
    (`PORT` is injected by Railway automatically.)
 4. Railway builds with Railpack, then runs `npm start` and binds `0.0.0.0:$PORT`.
 5. Under **Settings → Networking**, click **Generate Domain**, then check
