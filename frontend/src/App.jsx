@@ -729,7 +729,7 @@ function ExtractedField({ label, value, confidence }) {
   );
 }
 
-function DataPanel({ b, approved, onApprove, onReject, busy }) {
+function DataPanel({ b, approved, onApprove, onReject, busy, error }) {
   const recomputed = +(b.subtotal * b.rate / 100).toFixed(2);
   const verified = Math.abs(recomputed - b.gst) < 0.01;
   return (
@@ -798,6 +798,11 @@ function DataPanel({ b, approved, onApprove, onReject, busy }) {
               ACCOUNTANT_APPROVED → pushing to Zoho Books</div></div>
         </div>
       ) : (
+        <div>
+        {error && (
+          <div className="rounded-lg p-2.5 mb-3" style={{ background: T.exemptSoft,
+            border: "1px solid #E8C9C2", fontSize: 11.5, color: T.exempt }}>{error}</div>
+        )}
         <div className="flex gap-3">
           <button onClick={onReject} disabled={busy}
             className="rounded-lg px-4 flex items-center gap-2 focus:outline-none"
@@ -808,6 +813,7 @@ function DataPanel({ b, approved, onApprove, onReject, busy }) {
             style={{ background: T.claim, color: "#fff", fontSize: 13, fontWeight: 600, minHeight: 46,
               opacity: busy ? 0.7 : 1 }}>
             <Check size={17} strokeWidth={2.5} /> {busy ? "Working…" : "Approve & sync"}</button>
+        </div>
         </div>
       )}
       <div className="flex items-center justify-center gap-1.5 sm:gap-2 mt-4 flex-wrap"
@@ -829,6 +835,7 @@ function Approval() {
   const [tab, setTab] = useState("data");
   const [approvedIds, setApprovedIds] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
   useEffect(() => {
     let alive = true;
     getBills()
@@ -844,18 +851,28 @@ function Approval() {
 
   async function doApprove() {
     if (!b || busy) return;
-    setBusy(true);
-    try { if (live) await approveBill(b.id); } catch { /* keep optimistic */ }
-    setApprovedIds((prev) => new Set(prev).add(b.id));
-    setBusy(false);
+    setBusy(true); setErr(null);
+    try {
+      if (live) await approveBill(b.id); // only reflect success if the write lands
+      setApprovedIds((prev) => new Set(prev).add(b.id));
+    } catch {
+      setErr("Approve failed — writes need the full API key, not the read-only key.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function doReject() {
     if (!b || busy) return;
-    setBusy(true);
-    try { if (live) await rejectBill(b.id); } catch { /* keep optimistic */ }
-    setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status: "REJECTED" } : x)));
-    setSel(null);
-    setBusy(false);
+    setBusy(true); setErr(null);
+    try {
+      if (live) await rejectBill(b.id);
+      setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status: "REJECTED" } : x)));
+      setSel(null);
+    } catch {
+      setErr("Reject failed — writes need the full API key, not the read-only key.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!b) {
@@ -903,7 +920,7 @@ function Approval() {
             <InvoiceReplica b={b} pad={30} />
           </div>
           <div className="p-8 flex flex-col">
-            <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} />
+            <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />
           </div>
         </div>
       ) : (
@@ -926,7 +943,7 @@ function Approval() {
                 fontSize: 11, color: T.muted }}><FileText size={13} /> {b.invoice}.pdf</div>
               <InvoiceReplica b={b} pad={20} />
             </div>
-          ) : <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} />}
+          ) : <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} error={err} />}
         </div>
       )}
     </div>
