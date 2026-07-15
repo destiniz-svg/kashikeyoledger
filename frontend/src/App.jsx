@@ -13,6 +13,7 @@ import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInvent
 import { parseStatementCsv } from "./statement.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
+import { exportFilingPdf206 } from "./mira206.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -1319,11 +1320,14 @@ function TaxFiling() {
   }, []);
   const form = forms[Math.min(idx, forms.length - 1)] || forms[0];
   const filings = form.filings;
-  const canPdf = form.form === "MIRA_205_GGST"; // only the 205 form is bundled
+  const isTgst = form.form === "MIRA_206_TGST";
   async function downloadPdf(f) {
     setPdfBusy(true);
-    try { await exportFilingPdf(f, taxpayer); }
-    catch { exportFilingCsv(f, form); } // fall back to CSV if the form can't be filled
+    try {
+      // 205 fills the official blank form; 206 is generated from scratch.
+      if (isTgst) await exportFilingPdf206(f, taxpayer);
+      else await exportFilingPdf(f, taxpayer);
+    } catch { exportFilingCsv(f, form); } // fall back to CSV if the PDF can't be built
     finally { setPdfBusy(false); }
   }
   const current = filings.find((f) => f.status !== "FILED") || filings[filings.length - 1];
@@ -1374,13 +1378,11 @@ function TaxFiling() {
                 className="rounded-lg px-3 focus:outline-none transition-colors"
                 style={{ border: `1px solid ${T.line}`, color: T.muted, fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
                 CSV</button>
-              {canPdf && (
-                <button onClick={() => downloadPdf(current)} disabled={pdfBusy}
-                  className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
-                  style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42,
-                    opacity: pdfBusy ? 0.7 : 1 }}>
-                  <Download size={15} /> {pdfBusy ? "Filling…" : "Export MIRA 205 (PDF)"}</button>
-              )}
+              <button onClick={() => downloadPdf(current)} disabled={pdfBusy}
+                className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
+                style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42,
+                  opacity: pdfBusy ? 0.7 : 1 }}>
+                <Download size={15} /> {pdfBusy ? (isTgst ? "Building…" : "Filling…") : `Export ${form.mira} (PDF)`}</button>
             </div>
           </div>
           <div className="mt-5">
