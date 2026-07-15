@@ -117,6 +117,19 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
+/** A GGST (MIRA 205) filing period with computed tax figures. */
+export interface GstFilingRow {
+  id: string;
+  form: string;
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string;
+  status: string;
+  outputTax: number;
+  inputTax: number;
+  netPayable: number;
+}
+
 /** A vendor with spend rollups, shaped for the Vendors screen. */
 export interface VendorRow {
   id: string;
@@ -181,6 +194,7 @@ export interface LedgerStore {
   verifyMember(token: string): Promise<boolean>;
 
   listVendors(): Promise<VendorRow[]>;
+  listGstFilings(): Promise<GstFilingRow[]>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);

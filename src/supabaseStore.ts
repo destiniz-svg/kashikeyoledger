@@ -19,6 +19,7 @@ import {
   type EntryRow,
   type LedgerStore,
   type RevenueSummary,
+  type GstFilingRow,
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
@@ -374,6 +375,34 @@ export class SupabaseStore implements LedgerStore {
       totalSpend: Number(r.total_spend),
       lastBillDate: formatBillDate(r.last_bill_date),
       ini: vendorInitials(r.name),
+    }));
+  }
+
+  async listGstFilings(): Promise<GstFilingRow[]> {
+    const rows = (await this.#request("/rest/v1/rpc/org_gst_filings", {
+      method: "POST",
+      body: JSON.stringify({ p_org: this.org }),
+    })) as {
+      id: string;
+      form: string;
+      period_start: string;
+      period_end: string;
+      due_date: string;
+      status: string;
+      output_tax: string | number;
+      input_tax: string | number;
+      net_payable: string | number;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      form: r.form,
+      periodStart: r.period_start,
+      periodEnd: r.period_end,
+      dueDate: r.due_date,
+      status: r.status,
+      outputTax: Number(r.output_tax),
+      inputTax: Number(r.input_tax),
+      netPayable: Number(r.net_payable),
     }));
   }
 

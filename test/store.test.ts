@@ -205,6 +205,17 @@ test("the in-memory store has no auth provider (verifyMember is always false)", 
   assert.equal(await new MemoryStore().verifyMember("any-token"), false);
 });
 
+test("listGstFilings returns a GGST calendar with net = output - input", async () => {
+  const filings = await new MemoryStore().listGstFilings();
+  assert.ok(filings.length >= 1);
+  for (const f of filings) {
+    assert.equal(f.form, "MIRA_205_GGST");
+    assert.equal(Math.round((f.outputTax - f.inputTax) * 100) / 100, f.netPayable);
+  }
+  const due = filings.find((f) => f.status === "DUE_SOON");
+  assert.ok(due, "expected a DUE_SOON period");
+});
+
 test("listVendors rolls up spend and bill count per vendor, sorted by spend", async () => {
   const vendors = await new MemoryStore().listVendors();
   assert.equal(vendors.length, 6);

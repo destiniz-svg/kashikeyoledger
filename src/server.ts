@@ -141,6 +141,7 @@ const server = createServer(async (req, res) => {
           "GET /trial-balance  [read]",
           "GET /bills  [read]",
           "GET /vendors  [read]",
+          "GET /tax-filing  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
           "GET /sales  [read]",
@@ -290,6 +291,14 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && path === "/vendors") {
       if (!(await readGuard(req, res))) return;
       return send(res, 200, await store.listVendors());
+    }
+
+    if (method === "GET" && path === "/tax-filing") {
+      if (!(await readGuard(req, res))) return;
+      return send(res, 200, {
+        form: "MIRA_205_GGST",
+        filings: await store.listGstFilings(),
+      });
     }
 
     const billAction = /^\/bills\/([^/]+)\/(approve|reject)$/.exec(path);

@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, approveBill, rejectBill, API_BASE } from "./api.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 
 /* ---------------------------------------------------------------------------
@@ -33,6 +33,19 @@ const fmt = (n, cur = "MVR") =>
   `${cur === "MVR" ? "Rf" : "$"} ${Number(n).toLocaleString("en-US", {
     minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmt0 = (n) => `Rf ${Number(n).toLocaleString("en-US")}`;
+
+const MON_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MON_LONG = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${String(d).padStart(2, "0")} ${MON_SHORT[m - 1]} ${y}`;
+};
+const monthLabel = (iso) => {
+  const [y, m] = iso.split("-").map(Number);
+  return `${MON_LONG[m - 1]} ${y}`;
+};
 
 function useW() {
   const [w, setW] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1280);
@@ -1201,6 +1214,165 @@ function Vendors() {
 }
 
 /* ---------------------------------------------------------------------------
+   Tax filing — MIRA 205 (GGST) return
+--------------------------------------------------------------------------- */
+const FILING_STATUS = {
+  FILED: { t: "Filed", bg: T.claimSoft, fg: T.claim },
+  DUE_SOON: { t: "Due soon", bg: T.goldSoft, fg: T.warn },
+  UPCOMING: { t: "Upcoming", bg: "#EEF1EF", fg: T.muted },
+  OVERDUE: { t: "Overdue", bg: T.exemptSoft, fg: T.exempt },
+  EXPORTED: { t: "Exported", bg: T.tealSoft, fg: T.teal },
+};
+const FilingChip = ({ s }) => {
+  const x = FILING_STATUS[s] || FILING_STATUS.UPCOMING;
+  return <span style={{ background: x.bg, color: x.fg, fontFamily: mono, fontSize: 11,
+    padding: "3px 9px", borderRadius: 999, fontWeight: 600, whiteSpace: "nowrap" }}>{x.t}</span>;
+};
+const FILING_DEMO = [
+  { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
+  { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
+  { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", outputTax: 6, inputTax: 7280, netPayable: -7274 },
+  { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", outputTax: 0, inputTax: 0, netPayable: 0 },
+];
+
+function exportFilingCsv(f) {
+  const rows = [
+    ["MIRA 205 — GGST return"],
+    ["Period", `${f.periodStart} to ${f.periodEnd}`],
+    ["Due date", f.dueDate],
+    ["Output tax (GGST on sales)", f.outputTax.toFixed(2)],
+    ["Input tax (claimable GGST)", f.inputTax.toFixed(2)],
+    ["Net GST payable", f.netPayable.toFixed(2)],
+  ];
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `MIRA205-${f.periodStart}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function TaxFiling() {
+  const w = useW(); const wide = w >= 768;
+  const [filings, setFilings] = useState(FILING_DEMO);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getTaxFiling()
+      .then((d) => { if (alive && d?.filings?.length) { setFilings(d.filings); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const current = filings.find((f) => f.status !== "FILED") || filings[filings.length - 1];
+  const daysToDue = current
+    ? Math.ceil((Date.parse(`${current.dueDate}T00:00:00Z`) - Date.now()) / 86_400_000)
+    : 0;
+  const payable = current && current.netPayable > 0;
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="flex items-center gap-2 mb-4">
+        <Eyebrow>GST filing</Eyebrow>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+          fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
+          {live ? "LIVE" : "SAMPLE"}</span>
+        <span style={{ marginLeft: "auto", fontFamily: mono, fontSize: 11, color: T.faint }}>
+          MIRA 205 · GGST 8%</span>
+      </div>
+
+      {current && (
+        <div className="rounded-2xl p-5 sm:p-6 mb-5" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div style={{ fontSize: 17, fontWeight: 680, color: T.text }}>{monthLabel(current.periodStart)}</div>
+              <div className="flex items-center gap-2 mt-1.5">
+                <FilingChip s={current.status} />
+                <span style={{ fontSize: 12, color: daysToDue < 0 ? T.exempt : T.muted }}>
+                  due {fmtDate(current.dueDate)}
+                  {daysToDue >= 0 ? ` · in ${daysToDue} days` : ` · ${-daysToDue} days overdue`}</span>
+              </div>
+            </div>
+            <button onClick={() => exportFilingCsv(current)}
+              className="flex items-center gap-2 rounded-lg px-3.5 focus:outline-none transition-opacity hover:opacity-90"
+              style={{ background: T.ink, color: "#fff", fontSize: 12.5, fontWeight: 600, minHeight: 42 }}>
+              <Download size={15} /> Export MIRA 205 (CSV)</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
+            <div className="rounded-xl p-4" style={{ background: T.paper }}>
+              <Eyebrow>Output tax</Eyebrow>
+              <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.text, marginTop: 5 }}>
+                {fmt(current.outputTax)}</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>GGST charged on sales</div>
+            </div>
+            <div className="rounded-xl p-4" style={{ background: T.paper }}>
+              <Eyebrow>Input tax</Eyebrow>
+              <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.claim, marginTop: 5 }}>
+                {fmt(current.inputTax)}</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>claimable GGST on bills</div>
+            </div>
+            <div className="rounded-xl p-4" style={{ background: payable ? T.warnSoft : T.claimSoft,
+              border: `1px solid ${payable ? "#E7D3A6" : "#BFE0D2"}` }}>
+              <Eyebrow style={{ color: payable ? T.warn : T.claim }}>
+                {payable ? "Net payable" : "Net credit / refund"}</Eyebrow>
+              <div style={{ ...num, fontSize: 20, fontWeight: 680, marginTop: 5,
+                color: payable ? T.warn : T.claim }}>{fmt(Math.abs(current.netPayable))}</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>output − input tax</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-2xl overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        <div className="px-4 sm:px-6 py-4" style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>Filing calendar</div>
+        </div>
+        {wide ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: T.paper }}>
+              {["Period", "Due date", "Status", "Output", "Input", "Net"].map((h, i) => (
+                <th key={h} style={{ textAlign: i > 2 ? "right" : "left", padding: "11px 16px",
+                  fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
+                  color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
+              ))}</tr></thead>
+            <tbody>
+              {filings.map((f) => (
+                <tr key={f.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+                  <td style={{ padding: "12px 16px", fontSize: 13, color: T.text }}>{monthLabel(f.periodStart)}</td>
+                  <td style={{ padding: "12px 16px", fontSize: 12.5, color: T.muted }}>{fmtDate(f.dueDate)}</td>
+                  <td style={{ padding: "12px 16px" }}><FilingChip s={f.status} /></td>
+                  <td style={{ padding: "12px 16px", textAlign: "right", ...num, fontSize: 12.5, color: T.muted }}>{fmt(f.outputTax).replace("Rf ", "")}</td>
+                  <td style={{ padding: "12px 16px", textAlign: "right", ...num, fontSize: 12.5, color: T.muted }}>{fmt(f.inputTax).replace("Rf ", "")}</td>
+                  <td style={{ padding: "12px 16px", textAlign: "right", ...num, fontSize: 13, fontWeight: 600,
+                    color: f.netPayable > 0 ? T.warn : T.claim }}>{fmt(f.netPayable).replace("Rf ", "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div>
+            {filings.map((f, i) => (
+              <div key={f.id} className="px-4 py-3.5" style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: T.text }}>{monthLabel(f.periodStart)}</div>
+                  <div style={{ ...num, fontSize: 13.5, fontWeight: 700,
+                    color: f.netPayable > 0 ? T.warn : T.claim }}>{fmt(f.netPayable)}</div>
+                </div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <FilingChip s={f.status} />
+                  <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginLeft: "auto" }}>
+                    due {fmtDate(f.dueDate)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
    Placeholder
 --------------------------------------------------------------------------- */
 const PLACE = {
@@ -1356,7 +1528,8 @@ export default function App() {
           {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {active === "bills" && <Bills />}
           {active === "vendors" && <Vendors />}
-          {!isCore && active !== "vendors" && <Placeholder id={active} />}
+          {active === "filing" && <TaxFiling />}
+          {!isCore && active !== "vendors" && active !== "filing" && <Placeholder id={active} />}
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} counts={counts} />
