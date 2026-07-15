@@ -6,6 +6,7 @@
 import {
   StoreError,
   agingBucket,
+  assertReconStatus,
   bankTxnSigned,
   computeSale,
   formatBillDate,
@@ -97,6 +98,7 @@ export class MemoryStore implements LedgerStore {
   readonly #entries: EntryRow[] = [];
   readonly #sales: SaleRow[] = [];
   readonly #bills = DEMO_BILLS.map((b) => ({ ...b }));
+  readonly #bankTxns = DEMO_BANK_TXNS.map((t) => ({ ...t }));
 
   constructor(seed = true) {
     if (seed) {
@@ -263,7 +265,7 @@ export class MemoryStore implements LedgerStore {
 
   async listBankAccounts(): Promise<BankAccountRow[]> {
     return DEMO_BANK_ACCOUNTS.map((a) => {
-      const txns = DEMO_BANK_TXNS.filter((t) => t.accountId === a.id);
+      const txns = this.#bankTxns.filter((t) => t.accountId === a.id);
       return {
         id: a.id,
         name: a.name,
@@ -280,12 +282,26 @@ export class MemoryStore implements LedgerStore {
 
   async listBankTransactions(): Promise<BankTxnRow[]> {
     const names = new Map(DEMO_BANK_ACCOUNTS.map((a) => [a.id, a.name]));
-    return DEMO_BANK_TXNS.map(({ amt, ...t }) => ({
+    return this.#bankTxns.map(({ amt, ...t }) => ({
       ...t,
       accountName: names.get(t.accountId) ?? "",
       date: formatBillDate(t.isoDate),
       amount: bankTxnSigned(t.direction, amt),
     }));
+  }
+
+  async setBankRecon(
+    txnId: string,
+    status: string,
+    vendorId: string | null = null,
+  ): Promise<{ id: string; reconStatus: string }> {
+    assertReconStatus(status);
+    const txn = this.#bankTxns.find((t) => t.id === txnId);
+    if (!txn) throw new StoreError(`Bank transaction "${txnId}" not found`, 404);
+    txn.reconStatus = status;
+    if (status === "MATCHED") txn.matchedVendor = vendorId ?? txn.matchedVendor;
+    else if (status === "UNMATCHED") txn.matchedVendor = null;
+    return { id: txnId, reconStatus: status };
   }
 
   async listVendors(): Promise<VendorRow[]> {

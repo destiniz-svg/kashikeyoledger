@@ -147,6 +147,9 @@ const server = createServer(async (req, res) => {
           "GET /reports  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
+          "POST /banking/:txnId/confirm { vendorId? }  [write]",
+          "POST /banking/:txnId/exclude  [write]",
+          "POST /banking/:txnId/unmatch  [write]",
           "GET /sales  [read]",
           "POST /sales { date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }  [write]",
           "GET /revenue?from=YYYY-MM-DD&to=YYYY-MM-DD  [read]",
@@ -395,6 +398,16 @@ const server = createServer(async (req, res) => {
       const [, id, action] = billAction;
       const status = action === "approve" ? "ACCOUNTANT_APPROVED" : "REJECTED";
       return send(res, 200, await store.setBillStatus(id, status));
+    }
+
+    const bankAction = /^\/banking\/([^/]+)\/(confirm|exclude|unmatch)$/.exec(path);
+    if (method === "POST" && bankAction) {
+      const [, txnId, action] = bankAction;
+      const status =
+        action === "confirm" ? "MATCHED" : action === "exclude" ? "EXCLUDED" : "UNMATCHED";
+      const body = (await readJson(req)) as { vendorId?: string };
+      const vendorId = action === "confirm" ? body.vendorId ?? null : null;
+      return send(res, 200, await store.setBankRecon(txnId, status, vendorId));
     }
 
     if (method === "GET" && path === "/sales") {

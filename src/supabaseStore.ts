@@ -11,6 +11,7 @@
 import {
   StoreError,
   agingBucket,
+  assertReconStatus,
   bankTxnSigned,
   formatBillDate,
   vendorInitials,
@@ -495,6 +496,24 @@ export class SupabaseStore implements LedgerStore {
       reconStatus: r.recon_status,
       matchedVendor: r.vendors?.name ?? null,
     }));
+  }
+
+  async setBankRecon(
+    txnId: string,
+    status: string,
+    vendorId: string | null = null,
+  ): Promise<{ id: string; reconStatus: string }> {
+    assertReconStatus(status);
+    const result = (await this.#request("/rest/v1/rpc/set_bank_recon", {
+      method: "POST",
+      body: JSON.stringify({
+        p_org: this.org,
+        p_txn: txnId,
+        p_status: status,
+        p_vendor: vendorId,
+      }),
+    })) as string;
+    return { id: txnId, reconStatus: result };
   }
 
   async listGstFilings(): Promise<GstFilingRow[]> {

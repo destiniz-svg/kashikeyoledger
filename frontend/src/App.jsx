@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, confirmBankTxn, excludeBankTxn, unmatchBankTxn, approveBill, rejectBill, API_BASE } from "./api.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
 
@@ -1564,20 +1564,105 @@ const BANK_FILTERS = [
   ["EXCLUDED", "Excluded"],
 ];
 
-function Banking() {
+// Recompute the summary counts from the current transaction list (keeps the
+// SAMPLE view honest after optimistic edits, without a refetch).
+function reconSummary(transactions) {
+  const s = { total: transactions.length, unmatched: 0, suggested: 0, matched: 0, excluded: 0 };
+  for (const t of transactions) {
+    if (t.reconStatus === "UNMATCHED") s.unmatched++;
+    else if (t.reconStatus === "SUGGESTED") s.suggested++;
+    else if (t.reconStatus === "MATCHED") s.matched++;
+    else if (t.reconStatus === "EXCLUDED") s.excluded++;
+  }
+  s.unreconciled = s.unmatched + s.suggested;
+  return s;
+}
+
+function Banking({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
   const [data, setData] = useState(BANKING_DEMO);
   const [live, setLive] = useState(false);
   const [filter, setFilter] = useState("all");
-  useEffect(() => {
-    let alive = true;
-    getBanking()
-      .then((d) => { if (alive && d?.accounts) { setData(d); setLive(true); } })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  const [busy, setBusy] = useState(null); // id (or "bulk") currently being acted on
+  const [err, setErr] = useState(null);
+  async function load() {
+    try {
+      const d = await getBanking();
+      if (d?.accounts) { setData(d); setLive(true); }
+    } catch { /* keep current data */ }
+  }
+  useEffect(() => { load(); }, []);
 
-  const s = data.summary || { total: 0, matched: 0, unreconciled: 0 };
+  const ACTIONS = {
+    confirm: { status: "MATCHED", call: confirmBankTxn },
+    exclude: { status: "EXCLUDED", call: excludeBankTxn },
+    unmatch: { status: "UNMATCHED", call: unmatchBankTxn },
+  };
+  // Apply a reconciliation transition to one line — live via the API (refetch
+  // after), or optimistically against the SAMPLE data when offline.
+  async function act(id, action) {
+    if (busy) return;
+    if (live && !session) { onRequireLogin(); return; }
+    setBusy(id); setErr(null);
+    try {
+      if (live) {
+        await ACTIONS[action].call(id);
+        await load();
+      } else {
+        const status = ACTIONS[action].status;
+        setData((prev) => ({ ...prev, transactions: prev.transactions.map((t) =>
+          t.id === id ? { ...t, reconStatus: status,
+            matchedVendor: status === "UNMATCHED" ? null : t.matchedVendor } : t) }));
+      }
+    } catch {
+      setErr("Action failed — please sign in again.");
+    } finally { setBusy(null); }
+  }
+  // Bulk-confirm every SUGGESTED line in one review pass.
+  async function confirmAllSuggested() {
+    if (busy) return;
+    if (live && !session) { onRequireLogin(); return; }
+    const ids = data.transactions.filter((t) => t.reconStatus === "SUGGESTED").map((t) => t.id);
+    if (!ids.length) return;
+    setBusy("bulk"); setErr(null);
+    try {
+      if (live) {
+        for (const id of ids) await confirmBankTxn(id);
+        await load();
+      } else {
+        setData((prev) => ({ ...prev, transactions: prev.transactions.map((t) =>
+          t.reconStatus === "SUGGESTED" ? { ...t, reconStatus: "MATCHED" } : t) }));
+      }
+    } catch {
+      setErr("Bulk confirm failed — please sign in again.");
+    } finally { setBusy(null); }
+  }
+
+  const s = live ? (data.summary || reconSummary(data.transactions)) : reconSummary(data.transactions);
+  const suggestedCount = data.transactions.filter((t) => t.reconStatus === "SUGGESTED").length;
+
+  // Buttons offered per line depend on its current reconciliation state.
+  const ActBtn = ({ onClick, tone, children }) => (
+    <button onClick={onClick} disabled={!!busy}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono, fontSize: 10.5,
+        fontWeight: 600, letterSpacing: "0.02em", padding: "4px 9px", borderRadius: 7, cursor: busy ? "default" : "pointer",
+        border: `1px solid ${tone === "confirm" ? T.claim : tone === "exclude" ? T.line : T.line}`,
+        background: tone === "confirm" ? T.claimSoft : T.surface,
+        color: tone === "confirm" ? T.claim : T.muted, opacity: busy ? 0.55 : 1, whiteSpace: "nowrap" }}>
+      {children}</button>
+  );
+  const rowActions = (t) => {
+    const b = busy === t.id;
+    if (t.reconStatus === "MATCHED" || t.reconStatus === "EXCLUDED")
+      return <ActBtn onClick={() => act(t.id, "unmatch")} tone="undo">{b ? "…" : "Undo"}</ActBtn>;
+    return (
+      <div className="flex items-center gap-1.5">
+        <ActBtn onClick={() => act(t.id, "confirm")} tone="confirm">
+          <Check size={11} strokeWidth={2.5} />{b ? "…" : "Confirm"}</ActBtn>
+        <ActBtn onClick={() => act(t.id, "exclude")} tone="exclude">Exclude</ActBtn>
+      </div>
+    );
+  };
   const txns = data.transactions.filter((t) =>
     filter === "all" ? true
       : filter === "review" ? ["UNMATCHED", "SUGGESTED"].includes(t.reconStatus)
@@ -1643,6 +1728,15 @@ function Banking() {
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`, background: T.surface }}>
         <div className="flex flex-wrap items-center gap-2 px-4 sm:px-6 py-4" style={{ borderBottom: `1px solid ${T.line}` }}>
           <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>Bank statement</div>
+          {suggestedCount > 0 && (
+            <button onClick={confirmAllSuggested} disabled={busy === "bulk"}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: mono,
+                fontSize: 10.5, fontWeight: 600, letterSpacing: "0.03em", padding: "5px 11px",
+                borderRadius: 999, cursor: busy ? "default" : "pointer", border: `1px solid ${T.claim}`,
+                background: T.claimSoft, color: T.claim, opacity: busy === "bulk" ? 0.6 : 1 }}>
+              <Check size={12} strokeWidth={2.5} />
+              {busy === "bulk" ? "Confirming…" : `Confirm ${suggestedCount} suggested`}</button>
+          )}
           <div className="flex items-center gap-1.5" style={{ marginLeft: "auto" }}>
             {BANK_FILTERS.map(([id, label]) => {
               const on = filter === id;
@@ -1657,11 +1751,15 @@ function Banking() {
             })}
           </div>
         </div>
+        {err && (
+          <div className="px-4 sm:px-6 py-2.5" style={{ background: T.exemptSoft, color: T.exempt,
+            fontSize: 12, fontWeight: 500, borderBottom: `1px solid ${T.line}` }}>{err}</div>
+        )}
         {wide ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: T.paper }}>
-              {["Date", "Description", "Match", "Amount", "Status"].map((h, i) => (
-                <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "11px 16px",
+              {["Date", "Description", "Match", "Amount", "Status", ""].map((h, i) => (
+                <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "11px 16px",
                   fontFamily: mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase",
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
@@ -1687,6 +1785,7 @@ function Banking() {
                         {inflow ? <ArrowDownLeft size={13} color={T.claim} /> : <ArrowUpRight size={13} color={T.faint} />}
                         {inflow ? "+" : "−"}{fmt(Math.abs(t.amount), t.currency)}</span></td>
                     <td style={{ padding: "13px 16px" }}><ReconChip s={t.reconStatus} /></td>
+                    <td style={{ padding: "13px 16px", textAlign: "right" }}>{rowActions(t)}</td>
                   </tr>
                 );
               })}
@@ -1710,6 +1809,7 @@ function Banking() {
                   <div className="mt-2 flex items-center gap-2">
                     <ReconChip s={t.reconStatus} />
                     {t.matchedVendor && <span style={{ fontSize: 11.5, color: T.muted }}>{t.matchedVendor}</span>}
+                    <span style={{ marginLeft: "auto" }}>{rowActions(t)}</span>
                   </div>
                 </div>
               );
@@ -1998,7 +2098,7 @@ export default function App() {
           {active === "filing" && <TaxFiling />}
           {active === "reports" && <Reports />}
           {active === "inventory" && <Inventory />}
-          {active === "banking" && <Banking />}
+          {active === "banking" && <Banking session={session} onRequireLogin={() => setLoginOpen(true)} />}
           {!isCore && !["vendors", "filing", "reports", "inventory", "banking"].includes(active) && <Placeholder id={active} />}
         </div>
       </main>
