@@ -6,7 +6,7 @@
  * Listens on `process.env.PORT` (Railway sets this), defaulting to 3000.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { authorizeRead, authorizeWrite } from "./auth.ts";
+import { authorizeRead, authorizeWrite, extractApiKey } from "./auth.ts";
 import { createStore } from "./createStore.ts";
 import { StoreError, type EntryInput, type SaleInput } from "./store.ts";
 
@@ -24,6 +24,21 @@ function readGuard(req: IncomingMessage, res: ServerResponse): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * Writes are authorized by either the full API key (server-to-server) or a
+ * Supabase access token from a logged-in organization member (browser users).
+ */
+async function writeGuard(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const keyAuth = authorizeWrite(req.headers, API_KEY);
+  if (keyAuth.ok) return true;
+  const presented = extractApiKey(req.headers);
+  if (presented && presented !== API_KEY && (await store.verifyMember(presented))) {
+    return true;
+  }
+  send(res, keyAuth.status, { error: keyAuth.message });
+  return false;
 }
 
 const CORS_HEADERS = {
@@ -97,12 +112,9 @@ const server = createServer(async (req, res) => {
       return res.end();
     }
 
-    // Writes require a valid API key; reads are open.
+    // Writes require the API key or a logged-in member's token; reads are open.
     const isWrite = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
-    if (isWrite) {
-      const auth = authorizeWrite(req.headers, API_KEY);
-      if (!auth.ok) return send(res, auth.status, { error: auth.message });
-    }
+    if (isWrite && !(await writeGuard(req, res))) return;
 
     if (method === "GET" && path === "/health") {
       return send(res, 200, { status: "ok", backend: store.backend });

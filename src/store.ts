@@ -159,6 +159,13 @@ export interface LedgerStore {
 
   listBills(): Promise<BillRow[]>;
   setBillStatus(id: string, status: string): Promise<{ id: string; status: string }>;
+
+  /**
+   * Verify a Supabase access token belongs to a member of this organization.
+   * Used to authorize browser writes by a logged-in user. Returns false for
+   * backends without an auth provider (e.g. the in-memory store).
+   */
+  verifyMember(token: string): Promise<boolean>;
 }
 
 /** Statuses a bill may be moved to via the approval workflow. */

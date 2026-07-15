@@ -346,4 +346,22 @@ export class SupabaseStore implements LedgerStore {
     })) as string;
     return { id, status: result };
   }
+
+  async verifyMember(token: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.#url}/auth/v1/user`, {
+        headers: { apikey: this.#key, authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return false;
+      const user = (await res.json()) as { id?: string };
+      if (!user?.id) return false;
+      const rows = (await this.#request(
+        `/rest/v1/organization_members?organization_id=eq.${this.org}` +
+          `&user_id=eq.${user.id}&select=role`,
+      )) as unknown[];
+      return Array.isArray(rows) && rows.length > 0;
+    } catch {
+      return false;
+    }
+  }
 }

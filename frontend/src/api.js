@@ -8,6 +8,8 @@ const BASE = (
 ).replace(/\/+$/, "");
 const KEY = import.meta.env.VITE_API_KEY;
 
+import { getToken } from "./auth.js";
+
 export const API_BASE = BASE;
 
 async function get(path) {
@@ -18,7 +20,14 @@ async function get(path) {
 }
 
 async function post(path) {
-  const headers = KEY ? { "x-api-key": KEY } : {};
+  // Writes prefer a logged-in user's token; fall back to the key (which the
+  // server rejects for writes if it is only the read key — prompting sign-in).
+  const token = getToken();
+  const headers = token
+    ? { authorization: `Bearer ${token}` }
+    : KEY
+      ? { "x-api-key": KEY }
+      : {};
   const res = await fetch(`${BASE}${path}`, { method: "POST", headers });
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();
