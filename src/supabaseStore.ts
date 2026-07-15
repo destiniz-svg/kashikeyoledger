@@ -97,7 +97,14 @@ interface DbBill {
   status: string;
   notes: string | null;
   vendors: { name: string; tin: string | null } | null;
-  transaction_line_items: { tax_category: string }[];
+  transaction_line_items: {
+    tax_category: string;
+    tax_rate_percent: string | number;
+    description: string;
+    quantity: string | number;
+    unit_price: string | number;
+    sort_order: number;
+  }[];
 }
 
 export class SupabaseStore implements LedgerStore {
@@ -303,25 +310,40 @@ export class SupabaseStore implements LedgerStore {
       `/rest/v1/transactions?organization_id=eq.${this.org}` +
       `&type=in.(PURCHASE_BILL,EXPENSE)` +
       `&select=id,invoice_number,po_number,transaction_date,due_date,currency,subtotal,tax_total,grand_total,status,notes,` +
-      `vendors(name,tin),transaction_line_items(tax_category)` +
+      `vendors(name,tin),transaction_line_items(tax_category,tax_rate_percent,description,quantity,unit_price,sort_order)` +
       `&order=transaction_date.desc`;
     const rows = (await this.#request(query)) as DbBill[];
-    return rows.map((r) => ({
-      id: r.id,
-      vendor: r.vendors?.name ?? "—",
-      tin: r.vendors?.tin ?? "—",
-      invoice: r.invoice_number ?? "—",
-      po: r.po_number ?? "—",
-      date: formatBillDate(r.transaction_date),
-      due: formatBillDate(r.due_date),
-      cur: r.currency,
-      subtotal: Number(r.subtotal),
-      gst: Number(r.tax_total),
-      total: Number(r.grand_total),
-      cat: r.notes ?? "",
-      taxCat: r.transaction_line_items[0]?.tax_category ?? "GGST",
-      status: r.status,
-      aging: agingBucket(r.due_date),
-    }));
+    return rows.map((r) => {
+      const line = [...r.transaction_line_items].sort((a, b) => a.sort_order - b.sort_order)[0];
+      return {
+        id: r.id,
+        vendor: r.vendors?.name ?? "—",
+        tin: r.vendors?.tin ?? "—",
+        invoice: r.invoice_number ?? "—",
+        po: r.po_number ?? "—",
+        date: formatBillDate(r.transaction_date),
+        due: formatBillDate(r.due_date),
+        cur: r.currency,
+        subtotal: Number(r.subtotal),
+        gst: Number(r.tax_total),
+        total: Number(r.grand_total),
+        cat: r.notes ?? "",
+        taxCat: line?.tax_category ?? "GGST",
+        status: r.status,
+        aging: agingBucket(r.due_date),
+        rate: Number(line?.tax_rate_percent ?? 0),
+        line: line?.description ?? "",
+        qty: Number(line?.quantity ?? 1),
+        unit: Number(line?.unit_price ?? 0),
+      };
+    });
+  }
+
+  async setBillStatus(id: string, status: string): Promise<{ id: string; status: string }> {
+    const result = (await this.#request("/rest/v1/rpc/set_transaction_status", {
+      method: "POST",
+      body: JSON.stringify({ p_org: this.org, p_id: id, p_status: status }),
+    })) as string;
+    return { id, status: result };
   }
 }

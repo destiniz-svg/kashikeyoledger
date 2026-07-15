@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, API_BASE } from "./api.js";
+import { getDashboard, getBills, approveBill, rejectBill, API_BASE } from "./api.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -729,7 +729,7 @@ function ExtractedField({ label, value, confidence }) {
   );
 }
 
-function DataPanel({ b, approved, setApproved }) {
+function DataPanel({ b, approved, onApprove, onReject, busy }) {
   const recomputed = +(b.subtotal * b.rate / 100).toFixed(2);
   const verified = Math.abs(recomputed - b.gst) < 0.01;
   return (
@@ -799,13 +799,15 @@ function DataPanel({ b, approved, setApproved }) {
         </div>
       ) : (
         <div className="flex gap-3">
-          <button className="rounded-lg px-4 flex items-center gap-2 focus:outline-none"
+          <button onClick={onReject} disabled={busy}
+            className="rounded-lg px-4 flex items-center gap-2 focus:outline-none"
             style={{ border: `1px solid ${T.line}`, background: T.surface, color: T.muted,
-              fontSize: 13, fontWeight: 550, minHeight: 46 }}><X size={16} /> Reject</button>
-          <button onClick={() => setApproved(true)}
+              fontSize: 13, fontWeight: 550, minHeight: 46, opacity: busy ? 0.6 : 1 }}><X size={16} /> Reject</button>
+          <button onClick={onApprove} disabled={busy}
             className="flex-1 rounded-lg px-4 flex items-center justify-center gap-2 transition-opacity hover:opacity-90 focus:outline-none"
-            style={{ background: T.claim, color: "#fff", fontSize: 13, fontWeight: 600, minHeight: 46 }}>
-            <Check size={17} strokeWidth={2.5} /> Approve &amp; sync</button>
+            style={{ background: T.claim, color: "#fff", fontSize: 13, fontWeight: 600, minHeight: 46,
+              opacity: busy ? 0.7 : 1 }}>
+            <Check size={17} strokeWidth={2.5} /> {busy ? "Working…" : "Approve & sync"}</button>
         </div>
       )}
       <div className="flex items-center justify-center gap-1.5 sm:gap-2 mt-4 flex-wrap"
@@ -821,12 +823,54 @@ function DataPanel({ b, approved, setApproved }) {
 
 function Approval() {
   const w = useW(); const desktop = w >= 1024;
-  const queue = BILLS.filter((b) => b.status === "DRAFT" || b.status === "AI_VERIFIED");
-  const [sel, setSel] = useState(queue[0].id);
+  const [bills, setBills] = useState(BILLS);
+  const [live, setLive] = useState(false);
+  const [sel, setSel] = useState(null);
   const [tab, setTab] = useState("data");
-  const [approved, setApproved] = useState(false);
-  const b = BILLS.find((x) => x.id === sel);
-  useEffect(() => setApproved(false), [sel]);
+  const [approvedIds, setApprovedIds] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getBills()
+      .then((d) => { if (alive && Array.isArray(d) && d.length) { setBills(d); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const queue = bills.filter((x) => x.status === "DRAFT" || x.status === "AI_VERIFIED");
+  const selId = queue.some((q) => q.id === sel) ? sel : (queue[0]?.id ?? null);
+  const b = bills.find((x) => x.id === selId);
+  const approved = b ? approvedIds.has(b.id) : false;
+
+  async function doApprove() {
+    if (!b || busy) return;
+    setBusy(true);
+    try { if (live) await approveBill(b.id); } catch { /* keep optimistic */ }
+    setApprovedIds((prev) => new Set(prev).add(b.id));
+    setBusy(false);
+  }
+  async function doReject() {
+    if (!b || busy) return;
+    setBusy(true);
+    try { if (live) await rejectBill(b.id); } catch { /* keep optimistic */ }
+    setBills((prev) => prev.map((x) => (x.id === b.id ? { ...x, status: "REJECTED" } : x)));
+    setSel(null);
+    setBusy(false);
+  }
+
+  if (!b) {
+    return (
+      <div className="p-4 sm:p-8" style={{ background: T.paper }}>
+        <div className="rounded-2xl p-8 sm:p-10 text-center max-w-md mx-auto"
+          style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+          <CheckCircle2 size={30} color={T.claim} style={{ margin: "0 auto 12px" }} />
+          <div style={{ fontSize: 15.5, fontWeight: 660, color: T.text }}>Approval queue clear</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 5 }}>
+            No bills awaiting review.</div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ background: T.paper }}>
       <div className="flex gap-2 px-4 sm:px-8 py-3 sm:py-4 overflow-x-auto"
@@ -859,7 +903,7 @@ function Approval() {
             <InvoiceReplica b={b} pad={30} />
           </div>
           <div className="p-8 flex flex-col">
-            <DataPanel b={b} approved={approved} setApproved={setApproved} />
+            <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} />
           </div>
         </div>
       ) : (
@@ -882,7 +926,7 @@ function Approval() {
                 fontSize: 11, color: T.muted }}><FileText size={13} /> {b.invoice}.pdf</div>
               <InvoiceReplica b={b} pad={20} />
             </div>
-          ) : <DataPanel b={b} approved={approved} setApproved={setApproved} />}
+          ) : <DataPanel b={b} approved={approved} onApprove={doApprove} onReject={doReject} busy={busy} />}
         </div>
       )}
     </div>

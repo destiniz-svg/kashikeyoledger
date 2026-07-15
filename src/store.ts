@@ -117,7 +117,7 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
-/** A purchase bill / expense, shaped for the Bills screen. */
+/** A purchase bill / expense, shaped for the Bills and Approval screens. */
 export interface BillRow {
   id: string;
   vendor: string;
@@ -134,6 +134,10 @@ export interface BillRow {
   taxCat: string;
   status: string;
   aging: string;
+  rate: number;
+  line: string;
+  qty: number;
+  unit: number;
 }
 
 export interface LedgerStore {
@@ -154,7 +158,11 @@ export interface LedgerStore {
   revenue(from: string, to: string): Promise<RevenueSummary>;
 
   listBills(): Promise<BillRow[]>;
+  setBillStatus(id: string, status: string): Promise<{ id: string; status: string }>;
 }
+
+/** Statuses a bill may be moved to via the approval workflow. */
+export const BILL_STATUSES = ["DRAFT", "AI_VERIFIED", "ACCOUNTANT_APPROVED", "REJECTED"] as const;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

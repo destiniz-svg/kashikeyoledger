@@ -212,3 +212,47 @@ $$;
 
 grant execute on function public.record_sale(uuid, date, char, text, jsonb) to authenticated, service_role;
 grant execute on function public.org_revenue(uuid, date, date) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Approval workflow (migration kashikeyo_ledger_set_transaction_status_fn)
+-- ---------------------------------------------------------------------------
+
+-- Transition a transaction's approval status. On ACCOUNTANT_APPROVED, stamp
+-- approved_by (the system account) and approved_at.
+create or replace function public.set_transaction_status(
+  p_org uuid,
+  p_id uuid,
+  p_status text
+) returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid;
+  v_new approval_status;
+begin
+  if p_status not in ('DRAFT', 'AI_VERIFIED', 'ACCOUNTANT_APPROVED', 'REJECTED') then
+    raise exception 'unsupported status %', p_status;
+  end if;
+  v_new := p_status::approval_status;
+
+  if v_new = 'ACCOUNTANT_APPROVED' then
+    select id into v_user from profiles where email = 'system@kashikeyo.local';
+    update transactions
+       set status = v_new, approved_by = v_user, approved_at = now(), updated_at = now()
+     where id = p_id and organization_id = p_org;
+  else
+    update transactions
+       set status = v_new, updated_at = now()
+     where id = p_id and organization_id = p_org;
+  end if;
+
+  if not found then
+    raise exception 'transaction % not found for this organization', p_id;
+  end if;
+  return p_status;
+end;
+$$;
+
+grant execute on function public.set_transaction_status(uuid, uuid, text) to authenticated, service_role;
