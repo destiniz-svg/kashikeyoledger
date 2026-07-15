@@ -147,6 +147,7 @@ const server = createServer(async (req, res) => {
           "GET /reports  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
+          "POST /banking/import { bankAccountId, source?, lines: [...] }  [write]",
           "POST /banking/:txnId/confirm { vendorId? }  [write]",
           "POST /banking/:txnId/exclude  [write]",
           "POST /banking/:txnId/unmatch  [write]",
@@ -398,6 +399,23 @@ const server = createServer(async (req, res) => {
       const [, id, action] = billAction;
       const status = action === "approve" ? "ACCOUNTANT_APPROVED" : "REJECTED";
       return send(res, 200, await store.setBillStatus(id, status));
+    }
+
+    if (method === "POST" && path === "/banking/import") {
+      const body = (await readJson(req)) as {
+        bankAccountId?: string;
+        source?: string;
+        lines?: unknown;
+      };
+      if (!body.bankAccountId || !Array.isArray(body.lines)) {
+        return send(res, 400, { error: "bankAccountId and lines[] are required" });
+      }
+      const result = await store.importStatement(
+        body.bankAccountId,
+        body.source ?? "CSV_UPLOAD",
+        body.lines as never,
+      );
+      return send(res, 201, result);
     }
 
     const bankAction = /^\/banking\/([^/]+)\/(confirm|exclude|unmatch)$/.exec(path);

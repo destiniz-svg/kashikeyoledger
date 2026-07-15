@@ -188,6 +188,81 @@ export interface BankAccountRow {
   unreconciled: number; // lines still UNMATCHED or SUGGESTED
 }
 
+/** Sources a statement import may originate from (statement_source enum). */
+export const STATEMENT_SOURCES = ["CSV_UPLOAD", "PDF_UPLOAD", "BANK_FEED"] as const;
+
+/** A parsed statement line to be imported into bank_transactions. */
+export interface ImportLineInput {
+  date: string; // ISO YYYY-MM-DD
+  valueDate?: string | null;
+  type?: string | null;
+  reference?: string | null;
+  counterparty?: string | null;
+  narrative?: string | null;
+  direction: string; // "DEBIT" | "CREDIT"
+  amount: number; // positive magnitude
+  balance?: number | null;
+}
+
+/** Outcome of a statement import: how many lines landed vs. were duplicates. */
+export interface ImportResult {
+  importId: string | null;
+  imported: number;
+  duplicates: number;
+  total: number;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Validate and normalize parsed statement lines: each needs a valid ISO date,
+ * a DEBIT/CREDIT direction, and a positive amount. Throws StoreError on bad
+ * input. Returns clean lines safe to hand to the import RPC.
+ */
+export function normalizeImportLines(lines: unknown): ImportLineInput[] {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new StoreError("No statement lines to import");
+  }
+  return lines.map((raw, i) => {
+    const l = (raw ?? {}) as Record<string, unknown>;
+    const date = String(l.date ?? "");
+    if (!ISO_DATE.test(date)) {
+      throw new StoreError(`Line ${i + 1}: date must be ISO YYYY-MM-DD, got "${date}"`);
+    }
+    const direction = String(l.direction ?? "").toUpperCase();
+    if (!(BANK_DIRECTIONS as readonly string[]).includes(direction)) {
+      throw new StoreError(`Line ${i + 1}: direction must be DEBIT or CREDIT`);
+    }
+    const amount = Number(l.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new StoreError(`Line ${i + 1}: amount must be a positive number`);
+    }
+    const str = (v: unknown) => {
+      const s = v == null ? "" : String(v).trim();
+      return s === "" ? null : s;
+    };
+    const valueDate = str(l.valueDate);
+    if (valueDate && !ISO_DATE.test(valueDate)) {
+      throw new StoreError(`Line ${i + 1}: valueDate must be ISO YYYY-MM-DD`);
+    }
+    const balance = l.balance == null || l.balance === "" ? null : Number(l.balance);
+    if (balance != null && !Number.isFinite(balance)) {
+      throw new StoreError(`Line ${i + 1}: balance must be a number`);
+    }
+    return {
+      date,
+      valueDate,
+      type: str(l.type),
+      reference: str(l.reference),
+      counterparty: str(l.counterparty),
+      narrative: str(l.narrative),
+      direction,
+      amount: round2(amount),
+      balance,
+    };
+  });
+}
+
 /** A single bank statement line, shaped for the Banking screen. */
 export interface BankTxnRow {
   id: string;
@@ -283,6 +358,15 @@ export interface LedgerStore {
     status: string,
     vendorId?: string | null,
   ): Promise<{ id: string; reconStatus: string }>;
+  /**
+   * Import parsed statement lines into a bank account, deduplicating so a
+   * re-imported statement adds nothing. `source` is one of STATEMENT_SOURCES.
+   */
+  importStatement(
+    bankAccountId: string,
+    source: string,
+    lines: ImportLineInput[],
+  ): Promise<ImportResult>;
   listGstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;

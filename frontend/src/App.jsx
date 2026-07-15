@@ -4,12 +4,13 @@ import {
   CalendarClock, Search, Bell, ChevronRight, ChevronDown, TrendingUp,
   TrendingDown, Check, X, Sparkles, ShieldCheck, Wallet, ArrowUpRight,
   Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings,
-  Users, BarChart3, ArrowDownLeft, Link2
+  Users, BarChart3, ArrowDownLeft, Link2, UploadCloud
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, confirmBankTxn, excludeBankTxn, unmatchBankTxn, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, confirmBankTxn, excludeBankTxn, unmatchBankTxn, importStatement, approveBill, rejectBill, API_BASE } from "./api.js";
+import { parseStatementCsv } from "./statement.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
 
@@ -172,7 +173,7 @@ const NAV = [
       { id: "inventory", label: "Inventory" },
       { id: "txns", label: "All transactions" },
   ]},
-  { id: "banking", label: "Banking", short: "Banking", icon: Landmark, tag: "Beta" },
+  { id: "banking", label: "Banking", short: "Banking", icon: Landmark },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "filing", label: "Tax filing", short: "Filing", icon: CalendarClock },
   { id: "settings", label: "Settings", icon: Settings },
@@ -1578,6 +1579,154 @@ function reconSummary(transactions) {
   return s;
 }
 
+// Modal: pick an account, drop a BML CSV, preview the parse, then import.
+function ImportModal({ accounts, live, session, onRequireLogin, onClose, onImported }) {
+  const [acctId, setAcctId] = useState(accounts[0]?.id || "");
+  const [fileName, setFileName] = useState("");
+  const [parsed, setParsed] = useState(null); // { lines, skipped, period, error }
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [done, setDone] = useState(null); // { imported, duplicates, total }
+
+  function onFile(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFileName(f.name); setErr(null); setDone(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { setParsed(parseStatementCsv(String(reader.result || ""))); }
+      catch { setParsed({ lines: [], skipped: 0, period: null, error: "Couldn't read that file." }); }
+    };
+    reader.readAsText(f);
+  }
+
+  async function doImport() {
+    if (busy || !parsed?.lines?.length) return;
+    if (live && !session) { onRequireLogin(); return; }
+    setBusy(true); setErr(null);
+    try {
+      if (live) {
+        const res = await importStatement(acctId, parsed.lines);
+        setDone(res);
+        onImported();
+      } else {
+        // Offline preview: report what would import, nothing persists.
+        setDone({ imported: parsed.lines.length, duplicates: 0, total: parsed.lines.length, sample: true });
+      }
+    } catch {
+      setErr("Import failed — please sign in again.");
+    } finally { setBusy(false); }
+  }
+
+  const lines = parsed?.lines || [];
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(11,42,46,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 60 }}>
+      <div onClick={(e) => e.stopPropagation()} className="rounded-2xl w-full"
+        style={{ background: T.surface, border: `1px solid ${T.line}`, maxWidth: 560, maxHeight: "88vh",
+          overflow: "auto", boxShadow: "0 24px 60px rgba(11,42,46,0.28)" }}>
+        <div className="flex items-center justify-between px-5 sm:px-6 py-4" style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ fontSize: 15, fontWeight: 680, color: T.text }}>Import bank statement</div>
+          <button onClick={onClose} style={{ color: T.faint, cursor: "pointer" }}><X size={18} /></button>
+        </div>
+
+        <div className="px-5 sm:px-6 py-5 flex flex-col gap-4">
+          {done ? (
+            <div className="flex flex-col items-center text-center py-4 gap-2">
+              <div style={{ width: 46, height: 46, borderRadius: 999, background: T.claimSoft,
+                display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Check size={22} color={T.claim} strokeWidth={2.5} /></div>
+              <div style={{ fontSize: 15, fontWeight: 650, color: T.text }}>
+                {done.imported} line{done.imported === 1 ? "" : "s"} imported</div>
+              <div style={{ fontSize: 12.5, color: T.muted }}>
+                {done.duplicates} duplicate{done.duplicates === 1 ? "" : "s"} skipped · {done.total} in file
+                {done.sample && " · sample only (sign in to persist)"}</div>
+              <button onClick={onClose} className="mt-3" style={{ background: T.ink, color: "#fff",
+                borderRadius: 10, padding: "9px 20px", fontSize: 13, fontWeight: 550, cursor: "pointer" }}>Done</button>
+            </div>
+          ) : (
+            <>
+              <div>
+                <Eyebrow>Account</Eyebrow>
+                <select value={acctId} onChange={(e) => setAcctId(e.target.value)}
+                  className="w-full mt-1.5" style={{ border: `1px solid ${T.line}`, borderRadius: 10,
+                    padding: "9px 11px", fontSize: 13, color: T.text, background: T.surface,
+                    fontFamily: sans }}>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name} · {a.currency} · {a.accountMasked}</option>
+                  ))}
+                </select>
+              </div>
+
+              <label style={{ border: `1.5px dashed ${T.line}`, borderRadius: 12, padding: "22px 16px",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 7, cursor: "pointer",
+                background: T.paper, textAlign: "center" }}>
+                <UploadCloud size={26} color={T.teal} />
+                <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>
+                  {fileName || "Choose a CSV file"}</div>
+                <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                  BML statement export · Date, Description, Debit/Credit, Balance</div>
+                <input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
+              </label>
+
+              {parsed?.error && (
+                <div style={{ background: T.exemptSoft, color: T.exempt, borderRadius: 10,
+                  padding: "10px 12px", fontSize: 12.5 }}>{parsed.error}</div>
+              )}
+
+              {lines.length > 0 && (
+                <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.line}` }}>
+                  <div className="flex items-center gap-2 px-3 py-2.5" style={{ background: T.paper,
+                    borderBottom: `1px solid ${T.line}` }}>
+                    <span style={{ ...num, fontSize: 12.5, fontWeight: 650, color: T.text }}>
+                      {lines.length} line{lines.length === 1 ? "" : "s"} ready</span>
+                    {parsed.skipped > 0 && <span style={{ fontFamily: mono, fontSize: 10.5, color: T.warn }}>
+                      {parsed.skipped} skipped</span>}
+                    {parsed.period && <span style={{ marginLeft: "auto", fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                      {fmtDate(parsed.period.from)} – {fmtDate(parsed.period.to)}</span>}
+                  </div>
+                  <div>
+                    {lines.slice(0, 4).map((l, i) => (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2"
+                        style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                        <span style={{ ...num, fontSize: 11, color: T.faint, width: 78 }}>{fmtDate(l.date)}</span>
+                        <span style={{ fontSize: 12, color: T.text, flex: 1, overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {l.narrative || l.counterparty || l.reference || "—"}</span>
+                        <span style={{ ...num, fontSize: 12, fontWeight: 600,
+                          color: l.direction === "CREDIT" ? T.claim : T.text }}>
+                          {l.direction === "CREDIT" ? "+" : "−"}{dec2(l.amount)}</span>
+                      </div>
+                    ))}
+                    {lines.length > 4 && (
+                      <div className="px-3 py-2" style={{ borderTop: `1px solid ${T.line2}`,
+                        fontFamily: mono, fontSize: 10.5, color: T.faint }}>
+                        +{lines.length - 4} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {err && <div style={{ color: T.exempt, fontSize: 12.5 }}>{err}</div>}
+
+              <div className="flex items-center gap-2 justify-end">
+                <button onClick={onClose} style={{ border: `1px solid ${T.line}`, borderRadius: 10,
+                  padding: "9px 16px", fontSize: 13, fontWeight: 550, color: T.muted, background: T.surface,
+                  cursor: "pointer" }}>Cancel</button>
+                <button onClick={doImport} disabled={busy || !lines.length}
+                  style={{ background: lines.length ? T.ink : T.line, color: "#fff", borderRadius: 10,
+                    padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: lines.length ? "pointer" : "default",
+                    display: "inline-flex", alignItems: "center", gap: 6, opacity: busy ? 0.7 : 1 }}>
+                  <UploadCloud size={15} />{busy ? "Importing…" : `Import ${lines.length || ""}`.trim()}</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Banking({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
   const [data, setData] = useState(BANKING_DEMO);
@@ -1585,6 +1734,7 @@ function Banking({ session, onRequireLogin }) {
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(null); // id (or "bulk") currently being acted on
   const [err, setErr] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
   async function load() {
     try {
       const d = await getBanking();
@@ -1676,7 +1826,15 @@ function Banking({ session, onRequireLogin }) {
           fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
           {live ? "LIVE" : "SAMPLE"}</span>
+        <button onClick={() => setImportOpen(true)} style={{ marginLeft: "auto",
+          display: "inline-flex", alignItems: "center", gap: 6, background: T.ink, color: "#fff",
+          borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+          <UploadCloud size={15} /> Import statement</button>
       </div>
+      {importOpen && (
+        <ImportModal accounts={data.accounts} live={live} session={session}
+          onRequireLogin={onRequireLogin} onClose={() => setImportOpen(false)} onImported={load} />
+      )}
 
       {/* Account cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">

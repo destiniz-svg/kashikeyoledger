@@ -57,5 +57,7 @@ export const confirmBankTxn = (id, vendorId) =>
   post(`/banking/${encodeURIComponent(id)}/confirm`, vendorId ? { vendorId } : undefined);
 export const excludeBankTxn = (id) => bankAction(id, "exclude");
 export const unmatchBankTxn = (id) => bankAction(id, "unmatch");
+export const importStatement = (bankAccountId, lines, source = "CSV_UPLOAD") =>
+  post("/banking/import", { bankAccountId, source, lines });
 export const approveBill = (id) => post(`/bills/${encodeURIComponent(id)}/approve`);
 export const rejectBill = (id) => post(`/bills/${encodeURIComponent(id)}/reject`);

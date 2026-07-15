@@ -61,6 +61,7 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `GET /vendors`       | Vendor directory with per-vendor bill count / spend / last activity |
 | `GET /inventory`     | Stock on hand, weighted-average cost, stock value, low/out flags |
 | `GET /banking`       | Bank accounts (balance, unreconciled) + statement lines with reconciliation status |
+| `POST /banking/import` 🔒 | Import parsed statement lines `{ bankAccountId, source?, lines: [...] }` (dedupes on re-import) |
 | `POST /banking/:txnId/confirm` 🔒 | Confirm a bank line → `MATCHED` (optional `{ vendorId }` attaches a vendor) |
 | `POST /banking/:txnId/exclude` 🔒 | Exclude a bank line from reconciliation → `EXCLUDED` |
 | `POST /banking/:txnId/unmatch` 🔒 | Reset a bank line → `UNMATCHED` (clears the matched vendor) |
@@ -122,7 +123,7 @@ curl "$BASE_URL/trial-balance" -H "X-API-Key: $KASHIKEYO_API_KEY"
 ```
 
 **Writes** (`POST /accounts`, `/entries`, `/sales`, `/bills/:id/approve|reject`,
-`/banking/:txnId/confirm|exclude|unmatch`)
+`/banking/import`, `/banking/:txnId/confirm|exclude|unmatch`)
 require **either** the full `KASHIKEYO_API_KEY` (server-to-server) **or** a
 Supabase access token from a logged-in **organization member** (browser users) —
 sent as `Authorization: Bearer <token>`. The server verifies the token against
