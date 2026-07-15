@@ -63,6 +63,60 @@ export interface TrialBalanceRow {
   balance: number;
 }
 
+/** Tax categories permitted by the transaction_line_items enum. */
+export const TAX_CATEGORIES = [
+  "GGST",
+  "TGST",
+  "ZERO_RATED",
+  "EXEMPT",
+  "OUT_OF_SCOPE",
+] as const;
+
+export interface SaleLineInput {
+  description: string;
+  quantity?: number;
+  unitPrice: number;
+  taxCategory?: string;
+  taxRatePercent?: number;
+}
+
+export interface SaleInput {
+  date: string;
+  currency?: string;
+  notes?: string;
+  lines: SaleLineInput[];
+}
+
+export interface SaleLine {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineSubtotal: number;
+  taxCategory: string;
+  taxRatePercent: number;
+  taxAmount: number;
+}
+
+export interface SaleRow {
+  id: string;
+  date: string;
+  currency: string;
+  status: string;
+  subtotal: number;
+  taxTotal: number;
+  grandTotal: number;
+  lines: SaleLine[];
+}
+
+export interface RevenueSummary {
+  from: string;
+  to: string;
+  salesCount: number;
+  subtotal: number;
+  taxTotal: number;
+  grandTotal: number;
+}
+
 export interface LedgerStore {
   /** Identifies the active backend, e.g. "supabase" or "memory". */
   readonly backend: string;
@@ -75,6 +129,10 @@ export interface LedgerStore {
   postEntry(entry: EntryInput): Promise<{ id: string }>;
   trialBalance(): Promise<TrialBalanceRow[]>;
   outOfBalanceBy(): Promise<number>;
+
+  recordSale(sale: SaleInput): Promise<{ id: string }>;
+  listSales(): Promise<SaleRow[]>;
+  revenue(from: string, to: string): Promise<RevenueSummary>;
 }
 
 /** Raised for invalid ledger operations; carries an HTTP status hint. */
@@ -128,4 +186,62 @@ export function validateEntry(entry: EntryInput): {
     );
   }
   return { debitMinor, creditMinor };
+}
+
+/** Round a decimal to two places (whole minor units). */
+export function round2(amount: number): number {
+  return toMinor(amount) / 100;
+}
+
+/**
+ * Validate a sale and compute per-line subtotal/tax and rolled-up totals,
+ * matching the `record_sale` SQL function (subtotal = qty*price rounded to 2dp,
+ * tax = subtotal*rate/100 rounded to 2dp).
+ */
+export function computeSale(sale: SaleInput): {
+  lines: SaleLine[];
+  subtotal: number;
+  taxTotal: number;
+  grandTotal: number;
+} {
+  if (!Array.isArray(sale.lines) || sale.lines.length < 1) {
+    throw new StoreError("A sale needs at least one line item");
+  }
+  let subMinor = 0;
+  let taxMinor = 0;
+  const lines = sale.lines.map((l) => {
+    if (!l.description || !l.description.trim()) {
+      throw new StoreError("Each line item needs a description");
+    }
+    const quantity = l.quantity ?? 1;
+    const unitPrice = l.unitPrice;
+    const taxRatePercent = l.taxRatePercent ?? 0;
+    if (unitPrice == null || Number.isNaN(unitPrice)) {
+      throw new StoreError("Each line item needs a unit price");
+    }
+    if (quantity <= 0 || unitPrice < 0 || taxRatePercent < 0) {
+      throw new StoreError(
+        "quantity must be > 0, and unit price / tax rate must be >= 0",
+      );
+    }
+    const lineSubtotal = round2(quantity * unitPrice);
+    const taxAmount = round2((lineSubtotal * taxRatePercent) / 100);
+    subMinor += toMinor(lineSubtotal);
+    taxMinor += toMinor(taxAmount);
+    return {
+      description: l.description,
+      quantity,
+      unitPrice,
+      lineSubtotal,
+      taxCategory: l.taxCategory ?? "OUT_OF_SCOPE",
+      taxRatePercent,
+      taxAmount,
+    };
+  });
+  return {
+    lines,
+    subtotal: subMinor / 100,
+    taxTotal: taxMinor / 100,
+    grandTotal: (subMinor + taxMinor) / 100,
+  };
 }

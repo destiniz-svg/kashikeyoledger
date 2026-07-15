@@ -21,8 +21,14 @@ Writes to Supabase go through the `post_journal_entry` SQL function (see
 `supabase/functions.sql`) so the insert is atomic and balance-checked in the DB.
 
 Write requests (any POST/PUT/PATCH/DELETE) require an API key via `src/auth.ts`
-(`KASHIKEYO_API_KEY`); reads are open. Auth is **fail-closed** — with no key
-configured, writes are rejected (503).
+(`KASHIKEYO_API_KEY`); data reads require the full key or an optional read-only
+`KASHIKEYO_READ_API_KEY` (reads stay open only when no key is configured).
+Write auth is **fail-closed** — with no key configured, writes are rejected (503).
+
+**Revenue** is not in the journal (no `INCOME` account type). `POST /sales`
+records a `POS_SALE` in `transactions` + `transaction_line_items` via the
+`record_sale` SQL function; `GET /revenue` aggregates via `org_revenue`.
+API-recorded sales are attributed to a system account (`system@kashikeyo.local`).
 
 ## Commands
 

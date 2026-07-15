@@ -5,12 +5,16 @@
  */
 import {
   StoreError,
+  computeSale,
   toMinor,
   validateEntry,
   type AccountRow,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
+  type RevenueSummary,
+  type SaleInput,
+  type SaleRow,
   type TrialBalanceRow,
 } from "./store.ts";
 
@@ -34,6 +38,7 @@ export class MemoryStore implements LedgerStore {
   #idSeq = 0;
   readonly #accounts = new Map<string, AccountRow>();
   readonly #entries: EntryRow[] = [];
+  readonly #sales: SaleRow[] = [];
 
   constructor(seed = true) {
     if (seed) {
@@ -112,5 +117,37 @@ export class MemoryStore implements LedgerStore {
     const rows = await this.trialBalance();
     const minor = rows.reduce((sum, r) => sum + toMinor(r.balance), 0);
     return minor / 100;
+  }
+
+  async recordSale(sale: SaleInput): Promise<{ id: string }> {
+    const { lines, subtotal, taxTotal, grandTotal } = computeSale(sale);
+    const row: SaleRow = {
+      id: `sale-${++this.#idSeq}`,
+      date: sale.date,
+      currency: sale.currency ?? "MVR",
+      status: "DRAFT",
+      subtotal,
+      taxTotal,
+      grandTotal,
+      lines,
+    };
+    this.#sales.push(row);
+    return { id: row.id };
+  }
+
+  async listSales(): Promise<SaleRow[]> {
+    return [...this.#sales];
+  }
+
+  async revenue(from: string, to: string): Promise<RevenueSummary> {
+    const inRange = this.#sales.filter((s) => s.date >= from && s.date <= to);
+    return {
+      from,
+      to,
+      salesCount: inRange.length,
+      subtotal: inRange.reduce((n, s) => n + toMinor(s.subtotal), 0) / 100,
+      taxTotal: inRange.reduce((n, s) => n + toMinor(s.taxTotal), 0) / 100,
+      grandTotal: inRange.reduce((n, s) => n + toMinor(s.grandTotal), 0) / 100,
+    };
   }
 }

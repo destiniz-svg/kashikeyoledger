@@ -102,3 +102,113 @@ $$;
 
 grant execute on function public.post_journal_entry(uuid, date, text, jsonb) to authenticated, service_role;
 grant execute on function public.org_trial_balance(uuid) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Sales / revenue (migration kashikeyo_ledger_record_sale_and_revenue_fns)
+-- Revenue lives in `transactions` (there is no INCOME ledger account type).
+-- ---------------------------------------------------------------------------
+
+-- Record a POS sale as a transaction + line items, computing tax and totals.
+-- p_lines: [{ description, quantity?, unit_price, tax_category?, tax_rate_percent? }]
+create or replace function public.record_sale(
+  p_org uuid,
+  p_date date,
+  p_currency char(3),
+  p_notes text,
+  p_lines jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_txn_id uuid;
+  v_user uuid;
+  v_currency char(3);
+  v_line jsonb;
+  v_qty numeric;
+  v_price numeric;
+  v_subtotal numeric;
+  v_taxrate numeric;
+  v_taxamt numeric;
+  v_sum_sub numeric := 0;
+  v_sum_tax numeric := 0;
+  v_i int := 0;
+begin
+  if p_org is null then
+    raise exception 'organization id is required';
+  end if;
+  if jsonb_array_length(coalesce(p_lines, '[]'::jsonb)) < 1 then
+    raise exception 'a sale needs at least one line item';
+  end if;
+
+  select id into v_user from profiles where email = 'system@kashikeyo.local';
+  if v_user is null then
+    raise exception 'system account (system@kashikeyo.local) not found';
+  end if;
+
+  v_currency := coalesce(p_currency, 'MVR');
+
+  for v_line in select * from jsonb_array_elements(p_lines) loop
+    if coalesce(v_line->>'description', '') = '' then
+      raise exception 'each line item needs a description';
+    end if;
+    v_qty := coalesce((v_line->>'quantity')::numeric, 1);
+    v_price := (v_line->>'unit_price')::numeric;
+    v_taxrate := coalesce((v_line->>'tax_rate_percent')::numeric, 0);
+    if v_price is null then
+      raise exception 'each line item needs a unit_price';
+    end if;
+    if v_qty <= 0 or v_price < 0 or v_taxrate < 0 then
+      raise exception 'quantity must be > 0, and unit_price / tax_rate_percent >= 0';
+    end if;
+    v_subtotal := round(v_qty * v_price, 2);
+    v_taxamt := round(v_subtotal * v_taxrate / 100, 2);
+    v_sum_sub := v_sum_sub + v_subtotal;
+    v_sum_tax := v_sum_tax + v_taxamt;
+  end loop;
+
+  insert into transactions
+    (organization_id, type, transaction_date, currency, subtotal, tax_total, grand_total, created_by, notes)
+  values
+    (p_org, 'POS_SALE', p_date, v_currency, v_sum_sub, v_sum_tax, v_sum_sub + v_sum_tax, v_user, p_notes)
+  returning id into v_txn_id;
+
+  for v_line in select * from jsonb_array_elements(p_lines) loop
+    v_i := v_i + 1;
+    v_qty := coalesce((v_line->>'quantity')::numeric, 1);
+    v_price := (v_line->>'unit_price')::numeric;
+    v_taxrate := coalesce((v_line->>'tax_rate_percent')::numeric, 0);
+    v_subtotal := round(v_qty * v_price, 2);
+    v_taxamt := round(v_subtotal * v_taxrate / 100, 2);
+    insert into transaction_line_items
+      (transaction_id, organization_id, description, quantity, unit_price,
+       line_subtotal, tax_category, tax_rate_percent, tax_amount, sort_order)
+    values
+      (v_txn_id, p_org, v_line->>'description', v_qty, v_price,
+       v_subtotal, coalesce(v_line->>'tax_category', 'OUT_OF_SCOPE')::tax_category,
+       v_taxrate, v_taxamt, v_i);
+  end loop;
+
+  return v_txn_id;
+end;
+$$;
+
+-- Revenue totals over POS sales in a date range.
+create or replace function public.org_revenue(p_org uuid, p_from date, p_to date)
+returns table(sales_count bigint, subtotal numeric, tax_total numeric, grand_total numeric)
+language sql
+security definer
+set search_path = public
+as $$
+  select count(*)::bigint,
+         coalesce(sum(subtotal), 0),
+         coalesce(sum(tax_total), 0),
+         coalesce(sum(grand_total), 0)
+  from transactions
+  where organization_id = p_org and type = 'POS_SALE'
+    and transaction_date >= p_from and transaction_date <= p_to;
+$$;
+
+grant execute on function public.record_sale(uuid, date, char, text, jsonb) to authenticated, service_role;
+grant execute on function public.org_revenue(uuid, date, date) to anon, authenticated, service_role;

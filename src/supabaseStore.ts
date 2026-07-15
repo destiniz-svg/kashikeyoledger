@@ -14,6 +14,9 @@ import {
   type EntryInput,
   type EntryRow,
   type LedgerStore,
+  type RevenueSummary,
+  type SaleInput,
+  type SaleRow,
   type TrialBalanceRow,
 } from "./store.ts";
 
@@ -49,6 +52,33 @@ interface DbTrialBalanceRow {
   debit: string | number;
   credit: string | number;
   balance: string | number;
+}
+
+interface DbSale {
+  id: string;
+  transaction_date: string;
+  currency: string;
+  status: string;
+  subtotal: string | number;
+  tax_total: string | number;
+  grand_total: string | number;
+  transaction_line_items: {
+    description: string;
+    quantity: string | number;
+    unit_price: string | number;
+    line_subtotal: string | number;
+    tax_category: string;
+    tax_rate_percent: string | number;
+    tax_amount: string | number;
+    sort_order: number;
+  }[];
+}
+
+interface DbRevenue {
+  sales_count: string | number;
+  subtotal: string | number;
+  tax_total: string | number;
+  grand_total: string | number;
 }
 
 export class SupabaseStore implements LedgerStore {
@@ -182,5 +212,70 @@ export class SupabaseStore implements LedgerStore {
     const rows = await this.trialBalance();
     const minor = rows.reduce((sum, r) => sum + Math.round(r.balance * 100), 0);
     return minor / 100;
+  }
+
+  async recordSale(sale: SaleInput): Promise<{ id: string }> {
+    const id = (await this.#request("/rest/v1/rpc/record_sale", {
+      method: "POST",
+      body: JSON.stringify({
+        p_org: this.org,
+        p_date: sale.date,
+        p_currency: sale.currency ?? "MVR",
+        p_notes: sale.notes ?? null,
+        p_lines: sale.lines.map((l) => ({
+          description: l.description,
+          quantity: l.quantity ?? 1,
+          unit_price: l.unitPrice,
+          tax_category: l.taxCategory ?? "OUT_OF_SCOPE",
+          tax_rate_percent: l.taxRatePercent ?? 0,
+        })),
+      }),
+    })) as string;
+    return { id };
+  }
+
+  async listSales(): Promise<SaleRow[]> {
+    const query =
+      `/rest/v1/transactions?organization_id=eq.${this.org}&type=eq.POS_SALE` +
+      `&select=id,transaction_date,currency,status,subtotal,tax_total,grand_total,` +
+      `transaction_line_items(description,quantity,unit_price,line_subtotal,tax_category,tax_rate_percent,tax_amount,sort_order)` +
+      `&order=transaction_date.desc`;
+    const rows = (await this.#request(query)) as DbSale[];
+    return rows.map((r) => ({
+      id: r.id,
+      date: r.transaction_date,
+      currency: r.currency,
+      status: r.status,
+      subtotal: Number(r.subtotal),
+      taxTotal: Number(r.tax_total),
+      grandTotal: Number(r.grand_total),
+      lines: [...r.transaction_line_items]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((l) => ({
+          description: l.description,
+          quantity: Number(l.quantity),
+          unitPrice: Number(l.unit_price),
+          lineSubtotal: Number(l.line_subtotal),
+          taxCategory: l.tax_category,
+          taxRatePercent: Number(l.tax_rate_percent),
+          taxAmount: Number(l.tax_amount),
+        })),
+    }));
+  }
+
+  async revenue(from: string, to: string): Promise<RevenueSummary> {
+    const rows = (await this.#request("/rest/v1/rpc/org_revenue", {
+      method: "POST",
+      body: JSON.stringify({ p_org: this.org, p_from: from, p_to: to }),
+    })) as DbRevenue[];
+    const r = rows[0] ?? { sales_count: 0, subtotal: 0, tax_total: 0, grand_total: 0 };
+    return {
+      from,
+      to,
+      salesCount: Number(r.sales_count),
+      subtotal: Number(r.subtotal),
+      taxTotal: Number(r.tax_total),
+      grandTotal: Number(r.grand_total),
+    };
   }
 }

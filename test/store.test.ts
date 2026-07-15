@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MemoryStore } from "../src/memoryStore.ts";
-import { StoreError, validateEntry } from "../src/store.ts";
+import { StoreError, computeSale, validateEntry } from "../src/store.ts";
 
 test("a balanced entry posts and updates the trial balance", async () => {
   const s = new MemoryStore();
@@ -111,4 +111,74 @@ test("duplicate account codes are rejected", async () => {
     () => s.createAccount({ code: "1000", name: "Dup", accountType: "ASSET" }),
     /already exists/,
   );
+});
+
+test("computeSale rolls up subtotal, tax and grand total per line", () => {
+  const { lines, subtotal, taxTotal, grandTotal } = computeSale({
+    date: "2026-07-10",
+    lines: [
+      { description: "Room night", quantity: 2, unitPrice: 1500, taxCategory: "TGST", taxRatePercent: 16 },
+      { description: "Bottled water", quantity: 3, unitPrice: 25, taxCategory: "GGST", taxRatePercent: 8 },
+    ],
+  });
+  assert.equal(lines[0].lineSubtotal, 3000);
+  assert.equal(lines[0].taxAmount, 480);
+  assert.equal(lines[1].lineSubtotal, 75);
+  assert.equal(lines[1].taxAmount, 6);
+  assert.equal(subtotal, 3075);
+  assert.equal(taxTotal, 486);
+  assert.equal(grandTotal, 3561);
+});
+
+test("a sale defaults quantity to 1 and tax to zero/OUT_OF_SCOPE", () => {
+  const { lines, subtotal, taxTotal } = computeSale({
+    date: "2026-07-10",
+    lines: [{ description: "Consulting", unitPrice: 500 }],
+  });
+  assert.equal(lines[0].quantity, 1);
+  assert.equal(lines[0].taxCategory, "OUT_OF_SCOPE");
+  assert.equal(subtotal, 500);
+  assert.equal(taxTotal, 0);
+});
+
+test("a sale with no line items is rejected", () => {
+  assert.throws(
+    () => computeSale({ date: "2026-07-10", lines: [] }),
+    /at least one line item/,
+  );
+});
+
+test("a sale line without a description or price is rejected", () => {
+  assert.throws(
+    () => computeSale({ date: "2026-07-10", lines: [{ description: "", unitPrice: 5 }] }),
+    /needs a description/,
+  );
+  assert.throws(
+    () =>
+      computeSale({
+        date: "2026-07-10",
+        lines: [{ description: "x", unitPrice: undefined as unknown as number }],
+      }),
+    /needs a unit price/,
+  );
+});
+
+test("recordSale stores a sale and revenue sums it within a date range", async () => {
+  const s = new MemoryStore();
+  await s.recordSale({
+    date: "2026-07-10",
+    lines: [
+      { description: "Room night", quantity: 2, unitPrice: 1500, taxCategory: "TGST", taxRatePercent: 16 },
+      { description: "Bottled water", quantity: 3, unitPrice: 25, taxCategory: "GGST", taxRatePercent: 8 },
+    ],
+  });
+  assert.equal((await s.listSales()).length, 1);
+  const jul = await s.revenue("2026-07-01", "2026-07-31");
+  assert.equal(jul.salesCount, 1);
+  assert.equal(jul.subtotal, 3075);
+  assert.equal(jul.taxTotal, 486);
+  assert.equal(jul.grandTotal, 3561);
+  const aug = await s.revenue("2026-08-01", "2026-08-31");
+  assert.equal(aug.salesCount, 0);
+  assert.equal(aug.grandTotal, 0);
 });
