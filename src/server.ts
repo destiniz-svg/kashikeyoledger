@@ -142,6 +142,7 @@ const server = createServer(async (req, res) => {
           "GET /bills  [read]",
           "GET /vendors  [read]",
           "GET /tax-filing  [read]",
+          "GET /reports  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
           "GET /sales  [read]",
@@ -299,6 +300,55 @@ const server = createServer(async (req, res) => {
         form: "MIRA_205_GGST",
         taxpayer: await store.taxpayer(),
         filings: await store.listGstFilings(),
+      });
+    }
+
+    if (method === "GET" && path === "/reports") {
+      if (!(await readGuard(req, res))) return;
+      const tb = await store.trialBalance();
+      const bills = await store.listBills();
+      const sumType = (types: string[]) =>
+        tb.filter((r) => types.includes(r.accountType)).reduce((s, r) => s + r.balance, 0);
+      const { from, to } = monthRange(new Date());
+      const revenue = await store.revenue(from, to);
+      const filings = await store.listGstFilings();
+      const currentFiling = filings.find((f) => f.status !== "FILED") ?? filings.at(-1);
+
+      const AGING = ["current", "1_30", "31_60", "61_90", "90_plus"];
+      const apAging = AGING.map((bucket) => {
+        const rows = bills.filter((b) => b.aging === bucket);
+        return { bucket, amount: round2(rows.reduce((s, b) => s + b.total, 0)), count: rows.length };
+      });
+
+      const catMap = new Map<string, { amt: number; n: number }>();
+      for (const b of bills) {
+        const k = b.cat || "Uncategorised";
+        const cur = catMap.get(k) ?? { amt: 0, n: 0 };
+        cur.amt += b.total; cur.n += 1;
+        catMap.set(k, cur);
+      }
+      const spendByCategory = [...catMap]
+        .map(([name, v]) => ({ name, n: v.n, amt: round2(v.amt) }))
+        .sort((a, b) => b.amt - a.amt);
+
+      return send(res, 200, {
+        currency: "MVR",
+        kpis: {
+          totalSpend: round2(bills.reduce((s, b) => s + b.total, 0)),
+          billCount: bills.length,
+          revenueThisMonth: revenue.grandTotal,
+          salesCount: revenue.salesCount,
+          expenses: sumType(["EXPENSE", "COGS"]),
+          cashAndBank: sumType(["ASSET", "BANK"]),
+          accountsPayable: -sumType(["LIABILITY"]),
+          claimableInputTax: round2(
+            bills.filter((b) => b.taxCat !== "EXEMPT").reduce((s, b) => s + b.gst, 0),
+          ),
+          gstNetPosition: currentFiling ? currentFiling.netPayable : 0,
+          outOfBalanceBy: await store.outOfBalanceBy(),
+        },
+        apAging,
+        spendByCategory,
       });
     }
 

@@ -60,6 +60,7 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | `POST /bills/:id/reject` 🔒  | Reject a bill → `REJECTED`                                 |
 | `GET /vendors`       | Vendor directory with per-vendor bill count / spend / last activity |
 | `GET /tax-filing`    | MIRA 205 (GGST) filing calendar with output/input/net tax per period |
+| `GET /reports`       | Financial KPIs, AP aging, and spend-by-category                |
 | `GET /sales`         | List POS sales with their line items                          |
 | `POST /sales` 🔒     | Record a sale `{ date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }` |
 | `GET /revenue`       | Revenue totals for a period `?from=YYYY-MM-DD&to=YYYY-MM-DD`   |
