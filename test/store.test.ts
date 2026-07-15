@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MemoryStore } from "../src/memoryStore.ts";
-import { StoreError, computeSale, validateEntry } from "../src/store.ts";
+import { StoreError, agingBucket, computeSale, formatBillDate, validateEntry } from "../src/store.ts";
 
 test("a balanced entry posts and updates the trial balance", async () => {
   const s = new MemoryStore();
@@ -161,6 +161,30 @@ test("a sale line without a description or price is rejected", () => {
       }),
     /needs a unit price/,
   );
+});
+
+test("formatBillDate renders ISO dates as DD Mon YYYY", () => {
+  assert.equal(formatBillDate("2026-07-05"), "05 Jul 2026");
+  assert.equal(formatBillDate("2026-02-20"), "20 Feb 2026");
+  assert.equal(formatBillDate(null), "—");
+});
+
+test("agingBucket buckets a due date relative to a fixed today", () => {
+  const today = new Date("2026-07-15T00:00:00Z");
+  assert.equal(agingBucket("2026-07-20", today), "current"); // not yet due
+  assert.equal(agingBucket("2026-06-29", today), "1_30"); // 16 days
+  assert.equal(agingBucket("2026-05-26", today), "31_60"); // 50 days
+  assert.equal(agingBucket("2026-02-20", today), "90_plus"); // ~145 days
+});
+
+test("listBills returns the seeded bills with computed aging", async () => {
+  const bills = await new MemoryStore().listBills();
+  assert.equal(bills.length, 6);
+  const altura = bills.find((b) => b.invoice === "ALT/INV-000024");
+  assert.equal(altura?.vendor, "Altura Pvt Ltd");
+  assert.equal(altura?.total, 98280);
+  assert.equal(altura?.taxCat, "GGST");
+  assert.ok(["current", "1_30", "31_60", "61_90", "90_plus"].includes(altura?.aging ?? ""));
 });
 
 test("recordSale stores a sale and revenue sums it within a date range", async () => {

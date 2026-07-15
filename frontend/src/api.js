@@ -18,3 +18,4 @@ async function get(path) {
 }
 
 export const getDashboard = () => get("/dashboard");
+export const getBills = () => get("/bills");

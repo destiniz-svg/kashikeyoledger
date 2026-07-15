@@ -10,7 +10,10 @@
  */
 import {
   StoreError,
+  agingBucket,
+  formatBillDate,
   type AccountRow,
+  type BillRow,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -79,6 +82,22 @@ interface DbRevenue {
   subtotal: string | number;
   tax_total: string | number;
   grand_total: string | number;
+}
+
+interface DbBill {
+  id: string;
+  invoice_number: string | null;
+  po_number: string | null;
+  transaction_date: string;
+  due_date: string | null;
+  currency: string;
+  subtotal: string | number;
+  tax_total: string | number;
+  grand_total: string | number;
+  status: string;
+  notes: string | null;
+  vendors: { name: string; tin: string | null } | null;
+  transaction_line_items: { tax_category: string }[];
 }
 
 export class SupabaseStore implements LedgerStore {
@@ -277,5 +296,32 @@ export class SupabaseStore implements LedgerStore {
       taxTotal: Number(r.tax_total),
       grandTotal: Number(r.grand_total),
     };
+  }
+
+  async listBills(): Promise<BillRow[]> {
+    const query =
+      `/rest/v1/transactions?organization_id=eq.${this.org}` +
+      `&type=in.(PURCHASE_BILL,EXPENSE)` +
+      `&select=id,invoice_number,po_number,transaction_date,due_date,currency,subtotal,tax_total,grand_total,status,notes,` +
+      `vendors(name,tin),transaction_line_items(tax_category)` +
+      `&order=transaction_date.desc`;
+    const rows = (await this.#request(query)) as DbBill[];
+    return rows.map((r) => ({
+      id: r.id,
+      vendor: r.vendors?.name ?? "—",
+      tin: r.vendors?.tin ?? "—",
+      invoice: r.invoice_number ?? "—",
+      po: r.po_number ?? "—",
+      date: formatBillDate(r.transaction_date),
+      due: formatBillDate(r.due_date),
+      cur: r.currency,
+      subtotal: Number(r.subtotal),
+      gst: Number(r.tax_total),
+      total: Number(r.grand_total),
+      cat: r.notes ?? "",
+      taxCat: r.transaction_line_items[0]?.tax_category ?? "GGST",
+      status: r.status,
+      aging: agingBucket(r.due_date),
+    }));
   }
 }
