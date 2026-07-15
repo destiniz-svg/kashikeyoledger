@@ -102,6 +102,7 @@ const server = createServer(async (req, res) => {
           "GET /entries  [read]",
           "POST /entries { date, memo, lines: [{ accountCode, debit?, credit? }] }  [write]",
           "GET /trial-balance  [read]",
+          "GET /bills  [read]",
           "GET /sales  [read]",
           "POST /sales { date, currency?, notes?, lines: [{ description, quantity?, unitPrice, taxCategory?, taxRatePercent? }] }  [write]",
           "GET /revenue?from=YYYY-MM-DD&to=YYYY-MM-DD  [read]",
@@ -180,6 +181,11 @@ const server = createServer(async (req, res) => {
         spendByAccount,
         outOfBalanceBy: await store.outOfBalanceBy(),
       });
+    }
+
+    if (method === "GET" && path === "/bills") {
+      if (!readGuard(req, res)) return;
+      return send(res, 200, await store.listBills());
     }
 
     if (method === "GET" && path === "/sales") {

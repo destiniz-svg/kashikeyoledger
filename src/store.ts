@@ -117,6 +117,25 @@ export interface RevenueSummary {
   grandTotal: number;
 }
 
+/** A purchase bill / expense, shaped for the Bills screen. */
+export interface BillRow {
+  id: string;
+  vendor: string;
+  tin: string;
+  invoice: string;
+  po: string;
+  date: string;
+  due: string;
+  cur: string;
+  subtotal: number;
+  gst: number;
+  total: number;
+  cat: string;
+  taxCat: string;
+  status: string;
+  aging: string;
+}
+
 export interface LedgerStore {
   /** Identifies the active backend, e.g. "supabase" or "memory". */
   readonly backend: string;
@@ -133,6 +152,31 @@ export interface LedgerStore {
   recordSale(sale: SaleInput): Promise<{ id: string }>;
   listSales(): Promise<SaleRow[]>;
   revenue(from: string, to: string): Promise<RevenueSummary>;
+
+  listBills(): Promise<BillRow[]>;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Format an ISO date (YYYY-MM-DD) as "05 Jul 2026". */
+export function formatBillDate(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return `${String(d).padStart(2, "0")} ${MONTHS[m - 1]} ${y}`;
+}
+
+/** Aging bucket of a due date relative to `today` (defaults to now). */
+export function agingBucket(dueIso: string | null, today: Date = new Date()): string {
+  if (!dueIso) return "current";
+  const due = Date.parse(`${dueIso}T00:00:00Z`);
+  const now = Date.parse(`${today.toISOString().slice(0, 10)}T00:00:00Z`);
+  const days = Math.floor((now - due) / 86_400_000);
+  if (days <= 0) return "current";
+  if (days <= 30) return "1_30";
+  if (days <= 60) return "31_60";
+  if (days <= 90) return "61_90";
+  return "90_plus";
 }
 
 /** Raised for invalid ledger operations; carries an HTTP status hint. */

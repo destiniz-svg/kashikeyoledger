@@ -9,7 +9,7 @@ import {
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, API_BASE } from "./api.js";
+import { getDashboard, getBills, API_BASE } from "./api.js";
 
 /* ---------------------------------------------------------------------------
    Design tokens — "ledger at depth", now on a light, airy 44-style canvas
@@ -866,11 +866,26 @@ function Approval() {
 /* ---------------------------------------------------------------------------
    Bills — table (md+) / cards (mobile)
 --------------------------------------------------------------------------- */
-const AGE = { current: ["Current", T.claim], "1_30": ["1–30 days", T.warn],
-  "90_plus": ["90+ days", T.exempt] };
+const AGE = {
+  current: ["Current", T.claim],
+  "1_30": ["1–30 days", T.warn],
+  "31_60": ["31–60 days", T.warn],
+  "61_90": ["61–90 days", T.exempt],
+  "90_plus": ["90+ days", T.exempt],
+};
+const ageOf = (k) => AGE[k] || AGE.current;
 
 function Bills() {
   const w = useW(); const wide = w >= 768;
+  const [bills, setBills] = useState(BILLS);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getBills()
+      .then((d) => { if (alive && Array.isArray(d) && d.length) { setBills(d); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`,
@@ -878,7 +893,16 @@ function Bills() {
         <div className="flex items-center justify-between px-4 sm:px-6 py-4 gap-3"
           style={{ borderBottom: `1px solid ${T.line}` }}>
           <div className="min-w-0">
-            <Eyebrow>Accounts payable</Eyebrow>
+            <div className="flex items-center gap-2">
+              <Eyebrow>Accounts payable</Eyebrow>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4,
+                fontFamily: mono, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em",
+                color: live ? T.claim : T.faint }}>
+                <span style={{ width: 6, height: 6, borderRadius: 999,
+                  background: live ? T.claim : T.faint }} />
+                {live ? "LIVE" : "SAMPLE"}
+              </span>
+            </div>
             <div style={{ fontSize: 15, fontWeight: 620, color: T.text, marginTop: 2 }}>
               All bills &amp; expenses</div>
           </div>
@@ -897,7 +921,7 @@ function Bills() {
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
             <tbody>
-              {BILLS.map((b) => (
+              {bills.map((b) => (
                 <tr key={b.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
                   <td style={{ padding: "13px 16px" }}>
                     <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>{b.vendor}</div>
@@ -907,8 +931,8 @@ function Bills() {
                   <td style={{ padding: "13px 16px", fontSize: 12.5, color: T.muted }}>{b.date}</td>
                   <td style={{ padding: "13px 16px" }}><TaxChip c={b.taxCat} /></td>
                   <td style={{ padding: "13px 16px" }}>
-                    <span style={{ fontSize: 11.5, color: AGE[b.aging][1], fontWeight: 600 }}>
-                      {AGE[b.aging][0]}</span></td>
+                    <span style={{ fontSize: 11.5, color: ageOf(b.aging)[1], fontWeight: 600 }}>
+                      {ageOf(b.aging)[0]}</span></td>
                   <td style={{ padding: "13px 16px" }}><StatusPill s={b.status} /></td>
                   <td style={{ padding: "13px 16px", textAlign: "right", ...num, fontSize: 13,
                     fontWeight: 600, color: T.text }}>{fmt(b.total)}</td>
@@ -918,7 +942,7 @@ function Bills() {
           </table>
         ) : (
           <div>
-            {BILLS.map((b, i) => (
+            {bills.map((b, i) => (
               <div key={b.id} className="px-4 py-3.5"
                 style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
                 <div className="flex items-start justify-between gap-3">
@@ -931,8 +955,8 @@ function Bills() {
                 </div>
                 <div className="flex items-center gap-2 mt-2.5 flex-wrap">
                   <TaxChip c={b.taxCat} /><StatusPill s={b.status} />
-                  <span style={{ fontSize: 11, color: AGE[b.aging][1], fontWeight: 600 }}>
-                    · {AGE[b.aging][0]}</span>
+                  <span style={{ fontSize: 11, color: ageOf(b.aging)[1], fontWeight: 600 }}>
+                    · {ageOf(b.aging)[0]}</span>
                   <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint,
                     marginLeft: "auto" }}>due {b.due}</span>
                 </div>
