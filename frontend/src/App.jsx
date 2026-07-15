@@ -107,6 +107,11 @@ const BY_TAX = [
   { name: "Zero-rated", n: 6, amt: 9700, color: T.claim, claim: true },
   { name: "Exempt · Sec 20", n: 1, amt: 5809, color: T.exempt, claim: false },
 ];
+// Colors applied to live breakdown rows (which arrive without colors).
+const CAT_COLORS = [T.teal, T.ink, T.gold, T.exempt, T.warn, T.claim];
+const TAX_COLORS = { "GGST 8%": T.teal, "TGST 17%": T.gold, "Zero-rated": T.claim,
+  "Exempt · Sec 20": T.exempt, "Out of scope": T.muted };
+const dec2 = (n) => Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* ---------------------------------------------------------------------------
    Shared bits
@@ -467,16 +472,7 @@ function DropPill({ children }) {
 }
 
 /* ---- Live ledger strip — real data from the API, with graceful fallback --- */
-function LiveLedgerStrip() {
-  const [state, setState] = useState({ status: "loading", data: null });
-  useEffect(() => {
-    let alive = true;
-    getDashboard()
-      .then((d) => alive && setState({ status: "live", data: d }))
-      .catch(() => alive && setState({ status: "offline", data: null }));
-    return () => { alive = false; };
-  }, []);
-
+function LiveLedgerStrip({ state }) {
   if (state.status === "loading") {
     return (
       <div className="rounded-2xl p-4 mb-4" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
@@ -526,16 +522,43 @@ function LiveLedgerStrip() {
 }
 
 function Dashboard({ onNav }) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  useEffect(() => {
+    let alive = true;
+    getDashboard()
+      .then((d) => alive && setState({ status: "live", data: d }))
+      .catch(() => alive && setState({ status: "offline", data: null }));
+    return () => { alive = false; };
+  }, []);
+  const d = state.data;
+  const live = state.status === "live" && d;
+
+  const catRows = live && d.spendByCategory?.length
+    ? d.spendByCategory.map((r, i) => ({ ...r, color: CAT_COLORS[i % CAT_COLORS.length] }))
+    : BY_CATEGORY;
+  const vendorRows = live && d.spendByVendor?.length ? d.spendByVendor : BY_VENDOR;
+  const taxRows = live && d.spendByTax?.length
+    ? d.spendByTax.map((r) => ({ ...r, color: TAX_COLORS[r.name] || T.teal }))
+    : BY_TAX;
+  const trendData = live && d.spendTrend?.length ? d.spendTrend : TREND;
+  const totalSpend = live ? fmt0(d.totalSpend) : "Rf 213,790";
+  const billCount = live ? d.billCount : 26;
+  const largest = live ? d.largestBill : { vendor: "Altura Pvt Ltd", amt: 98280, date: "05 Jul" };
+  const delta = trendData.length >= 2 && trendData[trendData.length - 2].val
+    ? Math.round((trendData[trendData.length - 1].val - trendData[trendData.length - 2].val) /
+        trendData[trendData.length - 2].val * 100)
+    : null;
+
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
-      <LiveLedgerStrip />
+      <LiveLedgerStrip state={state} />
       {/* stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <StatCard label="Accounts payable" value="45,230.00" cur="MVR"
-          sub="6 bills pending" action="Review" onAction={() => onNav("bills")} />
-        <StatCard label="Awaiting approval" value="3" sub="2 AI-verified · 1 draft"
-          accent={T.teal} />
-        <StatCard label="Claimable input tax" value="8,107.00" cur="MVR"
+        <StatCard label="Accounts payable" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
+          sub={`${billCount} bills`} action="Review" onAction={() => onNav("bills")} />
+        <StatCard label="Awaiting approval" value={live ? String(d.pendingApprovals) : "3"}
+          sub="draft or AI-verified" accent={T.teal} />
+        <StatCard label="Claimable input tax" value={live ? dec2(d.claimableInputTax) : "8,107.00"} cur="MVR"
           sub="toward MIRA 205" accent={T.claim} />
         <StatCard label="Inventory value" value="312,400" cur="MVR"
           sub="weighted average cost" />
@@ -558,7 +581,7 @@ function Dashboard({ onNav }) {
             <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text, marginBottom: 14 }}>
               Purchase spending trend</div>
             <ResponsiveContainer width="100%" height={252}>
-              <AreaChart data={TREND} margin={{ left: -14, right: 6, top: 4 }}>
+              <AreaChart data={trendData} margin={{ left: -14, right: 6, top: 4 }}>
                 <defs>
                   <linearGradient id="fillTeal" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={T.teal} stopOpacity={0.22} />
@@ -586,19 +609,22 @@ function Dashboard({ onNav }) {
             <div>
               <Eyebrow>Total spend</Eyebrow>
               <div style={{ ...num, fontSize: 24, fontWeight: 680, color: T.text,
-                marginTop: 6, letterSpacing: "-0.02em" }}>Rf 213,790</div>
+                marginTop: 6, letterSpacing: "-0.02em" }}>{totalSpend}</div>
               <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>
-                1–31 Jul 2026 · 26 bills</div>
-              <div className="flex items-center gap-1 mt-2" style={{ ...num, fontSize: 11.5,
-                color: T.exempt, fontWeight: 600 }}>
-                <TrendingUp size={13} /> +15% vs June</div>
+                {billCount} bills{live ? " · all periods" : " · 1–31 Jul 2026"}</div>
+              {delta !== null && (
+                <div className="flex items-center gap-1 mt-2" style={{ ...num, fontSize: 11.5,
+                  color: delta >= 0 ? T.exempt : T.claim, fontWeight: 600 }}>
+                  {delta >= 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                  {delta >= 0 ? "+" : ""}{delta}% vs prev. month</div>
+              )}
             </div>
             <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 18 }}>
               <Eyebrow>Largest bill</Eyebrow>
               <div style={{ ...num, fontSize: 20, fontWeight: 680, color: T.text, marginTop: 6 }}>
-                Rf 98,280</div>
+                {fmt0(largest.amt)}</div>
               <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3 }}>
-                Altura Pvt Ltd · 05 Jul</div>
+                {largest.vendor} · {largest.date}</div>
               <button onClick={() => onNav("approval")}
                 className="flex items-center gap-1.5 mt-3 focus:outline-none"
                 style={{ fontSize: 12, color: T.teal, fontWeight: 600 }}>
@@ -610,19 +636,19 @@ function Dashboard({ onNav }) {
         {/* three breakdown columns */}
         <div className="grid grid-cols-1 md:grid-cols-3" style={{ borderTop: `1px solid ${T.line}` }}>
           <div className="p-5 sm:p-6" style={{ borderBottom: `1px solid ${T.line}` }}>
-            <BreakdownList title="Spend by category" rows={BY_CATEGORY} variant="cat"
+            <BreakdownList title="Spend by category" rows={catRows} variant="cat"
               onMore={() => onNav("reports")} />
           </div>
           <div className="p-5 sm:p-6"
             style={{ borderBottom: `1px solid ${T.line}` }}>
             <div className="md:border-l md:border-r md:px-6 md:-mx-6 md:h-full"
               style={{ borderColor: T.line }}>
-              <BreakdownList title="Spend by vendor" rows={BY_VENDOR} variant="avatar"
+              <BreakdownList title="Spend by vendor" rows={vendorRows} variant="avatar"
                 onMore={() => onNav("vendors")} />
             </div>
           </div>
           <div className="p-5 sm:p-6">
-            <BreakdownList title="Spend by tax class" rows={BY_TAX} variant="tax"
+            <BreakdownList title="Spend by tax class" rows={taxRows} variant="tax"
               onMore={() => onNav("filing")} />
           </div>
         </div>

@@ -51,6 +51,27 @@ function monthRange(d: Date): { from: string; to: string } {
   return { from: iso(new Date(Date.UTC(y, m, 1))), to: iso(new Date(Date.UTC(y, m + 1, 0))) };
 }
 
+const DASH_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Two-letter initials for a vendor avatar, ignoring company suffixes. */
+function initials(name: string): string {
+  const words = name
+    .split(/\s+/)
+    .filter((w) => !COMPANY_SUFFIX.has(w.toLowerCase().replace(/[^a-z]/gi, "")));
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return (words[0] ?? name).slice(0, 2).toUpperCase();
+}
+
+const TAX_LABEL: Record<string, string> = {
+  GGST: "GGST 8%",
+  TGST: "TGST 17%",
+  ZERO_RATED: "Zero-rated",
+  EXEMPT: "Exempt · Sec 20",
+  OUT_OF_SCOPE: "Out of scope",
+};
+
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -170,6 +191,56 @@ const server = createServer(async (req, res) => {
         .filter((r) => ["EXPENSE", "COGS"].includes(r.accountType) && r.balance !== 0)
         .map((r) => ({ code: r.code, name: r.name, amount: r.balance }))
         .sort((a, b) => b.amount - a.amount);
+
+      // Purchase-side breakdowns computed from bills.
+      const bills = await store.listBills();
+      const group = <K extends string>(keyFn: (b: (typeof bills)[number]) => K) => {
+        const m = new Map<K, { amt: number; n: number }>();
+        for (const b of bills) {
+          const k = keyFn(b);
+          const cur = m.get(k) ?? { amt: 0, n: 0 };
+          cur.amt += b.total;
+          cur.n += 1;
+          m.set(k, cur);
+        }
+        return m;
+      };
+      const spendByCategory = [...group((b) => b.cat || "Uncategorised")]
+        .map(([name, v]) => ({ name, n: v.n, amt: round2(v.amt) }))
+        .sort((a, b) => b.amt - a.amt);
+      const spendByVendor = [...group((b) => b.vendor)]
+        .map(([name, v]) => ({ name, n: v.n, amt: round2(v.amt), ini: initials(name) }))
+        .sort((a, b) => b.amt - a.amt);
+      const spendByTax = [...group((b) => b.taxCat)]
+        .map(([k, v]) => ({ name: TAX_LABEL[k] ?? k, n: v.n, amt: round2(v.amt), claim: k !== "EXEMPT" }))
+        .sort((a, b) => b.amt - a.amt);
+
+      // Monthly spend trend, ordered chronologically.
+      const trend = new Map<string, { order: number; val: number }>();
+      for (const b of bills) {
+        const [, mon, yr] = b.date.split(" ");
+        const idx = DASH_MONTHS.indexOf(mon);
+        if (idx < 0) continue;
+        const key = `${mon} ${yr}`;
+        const cur = trend.get(key) ?? { order: Number(yr) * 12 + idx, val: 0 };
+        cur.val += b.total;
+        trend.set(key, cur);
+      }
+      const spendTrend = [...trend]
+        .map(([label, v]) => ({ m: label.split(" ")[0], val: round2(v.val), order: v.order }))
+        .sort((a, b) => a.order - b.order)
+        .map(({ m, val }) => ({ m, val }));
+
+      const totalSpend = round2(bills.reduce((s, b) => s + b.total, 0));
+      const largest = bills.reduce(
+        (max, b) => (b.total > max.amt ? { vendor: b.vendor, amt: b.total, date: b.date } : max),
+        { vendor: "", amt: 0, date: "" },
+      );
+      const pendingApprovals = bills.filter((b) => ["DRAFT", "AI_VERIFIED"].includes(b.status)).length;
+      const claimableInputTax = round2(
+        bills.filter((b) => b.taxCat !== "EXEMPT").reduce((s, b) => s + b.gst, 0),
+      );
+
       return send(res, 200, {
         organization: store.org || null,
         currency: "MVR",
@@ -180,6 +251,15 @@ const server = createServer(async (req, res) => {
         revenueThisMonth: revenue,
         spendByAccount,
         outOfBalanceBy: await store.outOfBalanceBy(),
+        billCount: bills.length,
+        totalSpend,
+        largestBill: largest,
+        pendingApprovals,
+        claimableInputTax,
+        spendByCategory,
+        spendByVendor,
+        spendByTax,
+        spendTrend,
       });
     }
 
