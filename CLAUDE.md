@@ -11,10 +11,17 @@ is **no build step** and **no runtime dependencies**.
 ## Commands
 
 ```bash
+npm start          # run the HTTP API server (src/server.ts), binds to $PORT (default 3000)
 npm test           # run all tests (node:test) — no install needed
 npm run demo       # run the worked example in src/demo.ts
 npm run typecheck  # tsc --noEmit (requires `npm install` first for the typescript dev dep)
 ```
+
+## Deployment
+
+Deployed on Railway from the git repo. `railway.json` defines the start command
+(`npm start`) and `/health` health check; `.node-version` pins Node 22. The
+server (`src/server.ts`) must always bind `0.0.0.0` on `process.env.PORT`.
 
 Run a single test file directly:
 
