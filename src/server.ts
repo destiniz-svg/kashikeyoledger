@@ -145,6 +145,7 @@ const server = createServer(async (req, res) => {
           "GET /banking  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
+          "GET /settings  [read]",
           "POST /bills/:id/approve  [write]",
           "POST /bills/:id/reject  [write]",
           "POST /banking/import { bankAccountId, source?, lines: [...] }  [write]",
@@ -333,6 +334,35 @@ const server = createServer(async (req, res) => {
           excluded: byStatus.EXCLUDED,
           unreconciled: byStatus.UNMATCHED + byStatus.SUGGESTED,
         },
+      });
+    }
+
+    if (method === "GET" && path === "/settings") {
+      if (!(await readGuard(req, res))) return;
+      const settings = await store.orgSettings();
+      const members = await store.listMembers();
+      return send(res, 200, {
+        organization: store.org || null,
+        backend: store.backend,
+        readAuth: API_KEY || READ_API_KEY ? "required" : "open",
+        writeAuth: API_KEY ? "required" : "not configured",
+        profile: {
+          name: settings.name,
+          tin: settings.tin,
+          sector: settings.sector,
+          industryCode: settings.industryCode,
+          baseCurrency: settings.baseCurrency,
+          reportingCurrency: settings.reportingCurrency,
+          timezone: settings.timezone,
+        },
+        tax: {
+          gstRegistered: settings.gstRegistered,
+          gstFilingFrequency: settings.gstFilingFrequency,
+          fiscalYearStartMonth: settings.fiscalYearStartMonth,
+          greenTaxEnabled: settings.greenTaxEnabled,
+          greenTaxRateUsd: settings.greenTaxRateUsd,
+        },
+        members,
       });
     }
 

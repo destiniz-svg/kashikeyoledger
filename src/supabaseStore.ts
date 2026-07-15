@@ -14,6 +14,7 @@ import {
   assertReconStatus,
   bankTxnSigned,
   formatBillDate,
+  nameInitials,
   normalizeImportLines,
   vendorInitials,
   type AccountRow,
@@ -22,6 +23,8 @@ import {
   type BillRow,
   type ImportLineInput,
   type ImportResult,
+  type MemberRow,
+  type OrgSettings,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -590,6 +593,54 @@ export class SupabaseStore implements LedgerStore {
     )) as { name: string; tin: string | null }[];
     const org = rows[0];
     return { name: org?.name ?? "", tin: org?.tin ?? "" };
+  }
+
+  async orgSettings(): Promise<OrgSettings> {
+    const rows = (await this.#request(
+      `/rest/v1/organizations?id=eq.${this.org}` +
+        `&select=name,tin,sector,industry_code,base_currency,reporting_currency,timezone,` +
+        `gst_registered,gst_filing_frequency,fiscal_year_start_month,green_tax_enabled,green_tax_rate_usd`,
+    )) as {
+      name: string;
+      tin: string | null;
+      sector: string | null;
+      industry_code: string | null;
+      base_currency: string | null;
+      reporting_currency: string | null;
+      timezone: string | null;
+      gst_registered: boolean | null;
+      gst_filing_frequency: string | null;
+      fiscal_year_start_month: number | null;
+      green_tax_enabled: boolean | null;
+      green_tax_rate_usd: string | number | null;
+    }[];
+    const o = rows[0] ?? ({} as (typeof rows)[number]);
+    return {
+      name: o.name ?? "",
+      tin: o.tin ?? "",
+      sector: o.sector ?? "",
+      industryCode: o.industry_code ?? "",
+      baseCurrency: (o.base_currency ?? "").trim(),
+      reportingCurrency: (o.reporting_currency ?? "").trim(),
+      timezone: o.timezone ?? "",
+      gstRegistered: Boolean(o.gst_registered),
+      gstFilingFrequency: o.gst_filing_frequency ?? "",
+      fiscalYearStartMonth: Number(o.fiscal_year_start_month ?? 1),
+      greenTaxEnabled: Boolean(o.green_tax_enabled),
+      greenTaxRateUsd: Number(o.green_tax_rate_usd ?? 0),
+    };
+  }
+
+  async listMembers(): Promise<MemberRow[]> {
+    const rows = (await this.#request(
+      `/rest/v1/organization_members?organization_id=eq.${this.org}` +
+        `&select=role,profiles!user_id(full_name,email)&order=created_at`,
+    )) as { role: string; profiles: { full_name: string | null; email: string | null } | null }[];
+    return rows.map((r) => {
+      const name = r.profiles?.full_name ?? "";
+      const email = r.profiles?.email ?? "";
+      return { name, email, role: r.role, ini: nameInitials(name, email) };
+    });
   }
 
   async verifyMember(token: string): Promise<boolean> {

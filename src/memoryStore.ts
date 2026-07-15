@@ -11,6 +11,7 @@ import {
   bankTxnSigned,
   computeSale,
   formatBillDate,
+  nameInitials,
   normalizeImportLines,
   toMinor,
   validateEntry,
@@ -21,6 +22,8 @@ import {
   type BillRow,
   type ImportLineInput,
   type ImportResult,
+  type MemberRow,
+  type OrgSettings,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -239,6 +242,30 @@ export class MemoryStore implements LedgerStore {
 
   async taxpayer(): Promise<{ name: string; tin: string }> {
     return { name: "Kashikeyo Demo Co", tin: "" };
+  }
+
+  async orgSettings(): Promise<OrgSettings> {
+    return {
+      name: "Kashikeyo Demo Co",
+      tin: "",
+      sector: "GENERAL",
+      industryCode: "",
+      baseCurrency: "MVR",
+      reportingCurrency: "MVR",
+      timezone: "Indian/Maldives",
+      gstRegistered: true,
+      gstFilingFrequency: "MONTHLY",
+      fiscalYearStartMonth: 1,
+      greenTaxEnabled: false,
+      greenTaxRateUsd: 12,
+    };
+  }
+
+  async listMembers(): Promise<MemberRow[]> {
+    return [
+      { name: "", email: "owner@kashikeyo.local", role: "OWNER" },
+      { name: "", email: "accountant@kashikeyo.local", role: "ACCOUNTANT" },
+    ].map((m) => ({ ...m, ini: nameInitials(m.name, m.email) }));
   }
 
   async listItems(): Promise<ItemRow[]> {

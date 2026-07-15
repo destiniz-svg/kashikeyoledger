@@ -3,13 +3,13 @@ import {
   LayoutDashboard, ReceiptText, CheckCircle2, Package, Landmark,
   CalendarClock, Search, Bell, ChevronRight, ChevronDown, TrendingUp,
   TrendingDown, Check, X, Sparkles, ShieldCheck, Wallet, ArrowUpRight,
-  Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings,
+  Clock, Download, ArrowRight, FileText, MoreHorizontal, Plus, Settings as SettingsIcon,
   Users, BarChart3, ArrowDownLeft, Link2, UploadCloud
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
 } from "recharts";
-import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, confirmBankTxn, excludeBankTxn, unmatchBankTxn, importStatement, approveBill, rejectBill, API_BASE } from "./api.js";
+import { getDashboard, getBills, getVendors, getTaxFiling, getReports, getInventory, getBanking, getSettings, confirmBankTxn, excludeBankTxn, unmatchBankTxn, importStatement, approveBill, rejectBill, API_BASE } from "./api.js";
 import { parseStatementCsv } from "./statement.js";
 import { getSession, signIn, signOut, authConfigured } from "./auth.js";
 import { exportFilingPdf } from "./mira205.js";
@@ -176,7 +176,7 @@ const NAV = [
   { id: "banking", label: "Banking", short: "Banking", icon: Landmark },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "filing", label: "Tax filing", short: "Filing", icon: CalendarClock },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 const PRIMARY = ["dashboard", "approval", "bills", "banking"];
 const MORE = ["inventory", "vendors", "reports", "filing", "settings", "txns"];
@@ -2098,6 +2098,135 @@ function Reports() {
 }
 
 /* ---------------------------------------------------------------------------
+   Settings — organization profile, tax registration, team, workspace
+--------------------------------------------------------------------------- */
+const SETTINGS_DEMO = {
+  organization: null, backend: "memory", readAuth: "open", writeAuth: "not configured",
+  profile: { name: "Kashikeyo Demo Co", tin: "", sector: "GENERAL", industryCode: "",
+    baseCurrency: "MVR", reportingCurrency: "MVR", timezone: "Indian/Maldives" },
+  tax: { gstRegistered: true, gstFilingFrequency: "MONTHLY", fiscalYearStartMonth: 1,
+    greenTaxEnabled: false, greenTaxRateUsd: 12 },
+  members: [
+    { name: "", email: "owner@kashikeyo.local", role: "OWNER", ini: "OW" },
+    { name: "", email: "accountant@kashikeyo.local", role: "ACCOUNTANT", ini: "AC" },
+  ],
+};
+const ROLE_META = {
+  OWNER: { bg: T.goldSoft, fg: T.warn },
+  ADMIN: { bg: T.tealSoft, fg: T.teal },
+  ACCOUNTANT: { bg: T.tealSoft, fg: T.teal },
+  MEMBER: { bg: "#EEF1EF", fg: T.muted },
+  VIEWER: { bg: "#EEF1EF", fg: T.muted },
+};
+const titleCase = (s) => String(s || "").toLowerCase().replace(/(^|[\s_])\w/g, (m) => m.toUpperCase()).replace(/_/g, " ");
+
+const SettingsCard = ({ icon: Icon, title, children }) => (
+  <div className="rounded-2xl p-5 sm:p-6" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+    <div className="flex items-center gap-2.5 mb-4">
+      <div style={{ width: 32, height: 32, borderRadius: 9, background: T.tealSofter,
+        display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Icon size={16} color={T.teal} /></div>
+      <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>{title}</div>
+    </div>
+    {children}
+  </div>
+);
+const Field = ({ label, value, mono: isMono }) => (
+  <div className="flex items-baseline justify-between gap-3 py-2" style={{ borderTop: `1px solid ${T.line2}` }}>
+    <span style={{ fontSize: 12.5, color: T.muted }}>{label}</span>
+    <span style={{ fontSize: 12.5, fontWeight: 550, color: T.text, textAlign: "right",
+      ...(isMono ? { fontFamily: mono, fontSize: 11.5 } : {}) }}>{value || "—"}</span>
+  </div>
+);
+
+function Settings() {
+  const w = useW(); const wide = w >= 768;
+  const [data, setData] = useState(SETTINGS_DEMO);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getSettings()
+      .then((d) => { if (alive && d?.profile) { setData(d); setLive(true); } })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const { profile: p, tax: t, members } = data;
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <div className="flex items-center gap-2 mb-4">
+        <Eyebrow>Workspace settings</Eyebrow>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+          fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", color: live ? T.claim : T.faint }}>
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: live ? T.claim : T.faint }} />
+          {live ? "LIVE" : "SAMPLE"}</span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Organization profile */}
+        <SettingsCard icon={Landmark} title="Organization profile">
+          <div style={{ fontSize: 18, fontWeight: 700, color: T.text, marginBottom: 6 }}>{p.name || "—"}</div>
+          <Field label="Taxpayer TIN" value={p.tin} mono />
+          <Field label="Business sector" value={titleCase(p.sector)} />
+          <Field label="MIRA industry code" value={p.industryCode} mono />
+          <Field label="Base currency" value={p.baseCurrency} mono />
+          <Field label="Reporting currency" value={p.reportingCurrency} mono />
+          <Field label="Timezone" value={p.timezone} />
+        </SettingsCard>
+
+        {/* Tax registration */}
+        <SettingsCard icon={ShieldCheck} title="Tax registration">
+          <div className="flex items-center gap-2 pb-3">
+            <span style={{ background: t.gstRegistered ? T.claimSoft : "#EEF1EF",
+              color: t.gstRegistered ? T.claim : T.muted, fontFamily: mono, fontSize: 11, fontWeight: 600,
+              padding: "3px 10px", borderRadius: 999 }}>
+              {t.gstRegistered ? "GST registered" : "Not GST registered"}</span>
+          </div>
+          <Field label="GGST filing frequency" value={titleCase(t.gstFilingFrequency)} />
+          <Field label="Fiscal year starts" value={MON_LONG[(t.fiscalYearStartMonth || 1) - 1]} />
+          <Field label="Green tax" value={t.greenTaxEnabled ? "Enabled" : "Not enabled"} />
+          <Field label="Green tax rate" value={`$${dec2(t.greenTaxRateUsd)} / night`} mono />
+        </SettingsCard>
+
+        {/* Team members */}
+        <SettingsCard icon={Users} title={`Team${members.length ? ` · ${members.length}` : ""}`}>
+          <div className="flex flex-col">
+            {members.map((m, i) => {
+              const rm = ROLE_META[m.role] || ROLE_META.MEMBER;
+              return (
+                <div key={i} className="flex items-center gap-3 py-2.5"
+                  style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 999, background: T.ink, color: "#fff",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontFamily: mono,
+                    fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{m.ini}</div>
+                  <div className="min-w-0 flex-1">
+                    <div style={{ fontSize: 13, fontWeight: 550, color: T.text, overflow: "hidden",
+                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name || m.email}</div>
+                    {m.name && <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>{m.email}</div>}
+                  </div>
+                  <span style={{ background: rm.bg, color: rm.fg, fontFamily: mono, fontSize: 10,
+                    fontWeight: 600, letterSpacing: "0.04em", padding: "3px 9px", borderRadius: 999 }}>
+                    {titleCase(m.role)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </SettingsCard>
+
+        {/* Workspace / system */}
+        <SettingsCard icon={SettingsIcon} title="Workspace">
+          <Field label="Backend" value={data.backend === "supabase" ? "Supabase (live)" : "In-memory (demo)"} />
+          <Field label="Organization ID" value={data.organization || "—"} mono />
+          <Field label="API endpoint" value={API_BASE.replace(/^https?:\/\//, "")} mono />
+          <Field label="Read access" value={titleCase(data.readAuth)} />
+          <Field label="Write access" value={data.writeAuth === "required" ? "Required" : "Not configured"} />
+        </SettingsCard>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
    Placeholder
 --------------------------------------------------------------------------- */
 const PLACE = {
@@ -2125,7 +2254,7 @@ const PLACE = {
     ["Unified log of bills, expenses and POS sales",
      "Filter by vendor, category, tax class and status",
      "Drill into any journal or sync record"]],
-  settings: [Settings, "Settings",
+  settings: [SettingsIcon, "Settings",
     ["Organization profile, sector and GST registration",
      "Roles & access (Owner, Manager, Accountant)",
      "Connected accounting software and API keys"]],
@@ -2257,7 +2386,8 @@ export default function App() {
           {active === "reports" && <Reports />}
           {active === "inventory" && <Inventory />}
           {active === "banking" && <Banking session={session} onRequireLogin={() => setLoginOpen(true)} />}
-          {!isCore && !["vendors", "filing", "reports", "inventory", "banking"].includes(active) && <Placeholder id={active} />}
+          {active === "settings" && <Settings />}
+          {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "settings"].includes(active) && <Placeholder id={active} />}
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} counts={counts} />

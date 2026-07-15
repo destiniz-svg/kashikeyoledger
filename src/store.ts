@@ -281,6 +281,38 @@ export interface BankTxnRow {
   matchedVendor: string | null;
 }
 
+/** Organization profile + tax registration, shaped for the Settings screen. */
+export interface OrgSettings {
+  name: string;
+  tin: string;
+  sector: string;
+  industryCode: string;
+  baseCurrency: string;
+  reportingCurrency: string;
+  timezone: string;
+  gstRegistered: boolean;
+  gstFilingFrequency: string;
+  fiscalYearStartMonth: number;
+  greenTaxEnabled: boolean;
+  greenTaxRateUsd: number;
+}
+
+/** A team member of the organization (Settings screen). */
+export interface MemberRow {
+  name: string;
+  email: string;
+  role: string;
+  ini: string;
+}
+
+/** Two-letter initials for a person, falling back to the email local-part. */
+export function nameInitials(name: string, email = ""): string {
+  const src = (name || email.split("@")[0] || "?").trim();
+  const words = src.split(/[\s._-]+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return src.slice(0, 2).toUpperCase();
+}
+
 /** A vendor with spend rollups, shaped for the Vendors screen. */
 export interface VendorRow {
   id: string;
@@ -370,6 +402,11 @@ export interface LedgerStore {
   listGstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;
+
+  /** Organization profile + tax registration for the Settings screen. */
+  orgSettings(): Promise<OrgSettings>;
+  /** Team members of the organization. */
+  listMembers(): Promise<MemberRow[]>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);
