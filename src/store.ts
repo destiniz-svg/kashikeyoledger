@@ -165,6 +165,16 @@ export function bankTxnSigned(direction: string, amount: number): number {
   return direction === "CREDIT" ? amount : -amount;
 }
 
+/** Validate a reconciliation status, throwing a StoreError if unsupported. */
+export function assertReconStatus(status: string): string {
+  if (!(RECON_STATUSES as readonly string[]).includes(status)) {
+    throw new StoreError(
+      `Unsupported reconciliation status "${status}" (expected one of ${RECON_STATUSES.join(", ")})`,
+    );
+  }
+  return status;
+}
+
 /** A bank account with its current balance and reconciliation rollups. */
 export interface BankAccountRow {
   id: string;
@@ -263,6 +273,16 @@ export interface LedgerStore {
   listItems(): Promise<ItemRow[]>;
   listBankAccounts(): Promise<BankAccountRow[]>;
   listBankTransactions(): Promise<BankTxnRow[]>;
+  /**
+   * Transition a bank line's reconciliation status. `status` must be one of
+   * RECON_STATUSES. `vendorId` attaches a vendor when confirming a MATCHED line;
+   * resetting to UNMATCHED clears any vendor.
+   */
+  setBankRecon(
+    txnId: string,
+    status: string,
+    vendorId?: string | null,
+  ): Promise<{ id: string; reconStatus: string }>;
   listGstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;

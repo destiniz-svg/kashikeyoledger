@@ -337,3 +337,52 @@ as $$
 $$;
 
 grant execute on function public.org_gst_filings(uuid) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Bank reconciliation (migration kashikeyo_ledger_set_bank_recon_fn)
+-- ---------------------------------------------------------------------------
+
+-- Transition a bank line's recon_status, managing matched_vendor_id: confirming
+-- a MATCH attaches the given vendor (or keeps the existing guess); resetting to
+-- UNMATCHED clears the vendor. Org-scoped and enum-validated.
+create or replace function public.set_bank_recon(
+  p_org uuid,
+  p_txn uuid,
+  p_status text,
+  p_vendor uuid default null
+) returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_new recon_status;
+begin
+  if p_status not in ('UNMATCHED', 'SUGGESTED', 'MATCHED', 'EXCLUDED') then
+    raise exception 'unsupported recon status %', p_status;
+  end if;
+  v_new := p_status::recon_status;
+
+  if v_new = 'MATCHED' then
+    update bank_transactions
+       set recon_status = v_new,
+           matched_vendor_id = coalesce(p_vendor, matched_vendor_id)
+     where id = p_txn and organization_id = p_org;
+  elsif v_new = 'UNMATCHED' then
+    update bank_transactions
+       set recon_status = v_new, matched_vendor_id = null
+     where id = p_txn and organization_id = p_org;
+  else
+    update bank_transactions
+       set recon_status = v_new
+     where id = p_txn and organization_id = p_org;
+  end if;
+
+  if not found then
+    raise exception 'bank transaction % not found for this organization', p_txn;
+  end if;
+  return p_status;
+end;
+$$;
+
+grant execute on function public.set_bank_recon(uuid, uuid, text, uuid) to authenticated, service_role;

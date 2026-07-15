@@ -270,6 +270,36 @@ test("listBankTransactions signs amounts by direction and labels the account", a
   assert.equal(debit?.date, "05 Jun 2026");
 });
 
+test("setBankRecon confirms a suggested line to MATCHED and updates counts", async () => {
+  const s = new MemoryStore();
+  const before = (await s.listBankTransactions()).find((t) => t.reference === "FT26071240");
+  assert.equal(before?.reconStatus, "SUGGESTED");
+  const res = await s.setBankRecon(before.id, "MATCHED");
+  assert.deepEqual(res, { id: before.id, reconStatus: "MATCHED" });
+  const after = (await s.listBankTransactions()).find((t) => t.id === before.id);
+  assert.equal(after?.reconStatus, "MATCHED");
+  // The MVR account's unreconciled count drops by one.
+  const acct = (await s.listBankAccounts()).find((a) => a.currency === "MVR");
+  assert.equal(acct?.unreconciled, 4);
+});
+
+test("setBankRecon UNMATCHED clears the matched vendor", async () => {
+  const s = new MemoryStore();
+  const matched = (await s.listBankTransactions()).find((t) => t.reference === "FT26060544");
+  assert.equal(matched?.matchedVendor, "Altura Pvt Ltd");
+  await s.setBankRecon(matched.id, "UNMATCHED");
+  const after = (await s.listBankTransactions()).find((t) => t.id === matched.id);
+  assert.equal(after?.reconStatus, "UNMATCHED");
+  assert.equal(after?.matchedVendor, null);
+});
+
+test("setBankRecon rejects an unknown status and an unknown line", async () => {
+  const s = new MemoryStore();
+  const t = (await s.listBankTransactions())[0];
+  await assert.rejects(() => s.setBankRecon(t.id, "BOGUS"), /Unsupported reconciliation status/);
+  await assert.rejects(() => s.setBankRecon("nope", "MATCHED"), /not found/);
+});
+
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
   const s = new MemoryStore();
   await s.recordSale({

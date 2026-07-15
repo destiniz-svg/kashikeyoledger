@@ -26,7 +26,7 @@ async function get(path) {
   return res.json();
 }
 
-async function post(path) {
+async function post(path, body) {
   // Writes prefer a logged-in user's token; fall back to the key (which the
   // server rejects for writes if it is only the read key — prompting sign-in).
   const token = getToken();
@@ -35,7 +35,12 @@ async function post(path) {
     : KEY
       ? { "x-api-key": KEY }
       : {};
-  const res = await fetch(`${BASE}${path}`, { method: "POST", headers });
+  const init = { method: "POST", headers };
+  if (body !== undefined) {
+    init.headers = { ...headers, "content-type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();
 }
@@ -47,5 +52,10 @@ export const getTaxFiling = () => get("/tax-filing");
 export const getReports = () => get("/reports");
 export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
+const bankAction = (id, action) => post(`/banking/${encodeURIComponent(id)}/${action}`);
+export const confirmBankTxn = (id, vendorId) =>
+  post(`/banking/${encodeURIComponent(id)}/confirm`, vendorId ? { vendorId } : undefined);
+export const excludeBankTxn = (id) => bankAction(id, "exclude");
+export const unmatchBankTxn = (id) => bankAction(id, "unmatch");
 export const approveBill = (id) => post(`/bills/${encodeURIComponent(id)}/approve`);
 export const rejectBill = (id) => post(`/bills/${encodeURIComponent(id)}/reject`);
