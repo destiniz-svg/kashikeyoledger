@@ -167,12 +167,13 @@ const PRIMARY = ["dashboard", "approval", "bills", "banking"];
 const MORE = ["inventory", "vendors", "reports", "filing", "settings", "txns"];
 
 /* ---- Light nested sidebar ------------------------------------------------ */
-function Sidebar({ active, onNav }) {
+function Sidebar({ active, onNav, counts }) {
   const [open, setOpen] = useState(true);
   const childActive = ["vendors", "inventory", "txns"].includes(active);
 
   const Item = ({ n }) => {
     const on = active === n.id; const Icon = n.icon;
+    const badge = counts?.[n.id] ?? n.badge;
     return (
       <button onClick={() => onNav(n.id)}
         className="flex items-center gap-3 rounded-lg text-left transition-colors focus:outline-none"
@@ -181,9 +182,9 @@ function Sidebar({ active, onNav }) {
           color: on ? T.teal : T.text, fontSize: 13.5, fontWeight: on ? 600 : 460 }}>
         <Icon size={17} strokeWidth={2} style={{ color: on ? T.teal : T.faint }} />
         <span className="flex-1">{n.label}</span>
-        {n.badge && <span style={{ background: on ? T.teal : T.line2, color: on ? "#fff" : T.muted,
+        {badge ? <span style={{ background: on ? T.teal : T.line2, color: on ? "#fff" : T.muted,
           fontFamily: mono, fontSize: 10.5, fontWeight: 700, borderRadius: 999,
-          padding: "1px 7px" }}>{n.badge}</span>}
+          padding: "1px 7px" }}>{badge}</span> : null}
         {n.tag && <span style={{ border: `1px solid ${T.line}`, color: T.gold, fontFamily: mono,
           fontSize: 9.5, borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>{n.tag}</span>}
       </button>
@@ -300,7 +301,7 @@ function MobileHeader({ title }) {
   );
 }
 
-function BottomNav({ active, onNav }) {
+function BottomNav({ active, onNav, counts }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const inMore = MORE.includes(active);
   const tabs = PRIMARY.map((id) => NAV.find((n) => n.id === id));
@@ -336,6 +337,7 @@ function BottomNav({ active, onNav }) {
         paddingBottom: "env(safe-area-inset-bottom)" }}>
         {tabs.map((n) => {
           const on = active === n.id; const Icon = n.icon;
+          const badge = counts?.[n.id] ?? n.badge;
           return (
             <button key={n.id} onClick={() => onNav(n.id)}
               className="flex-1 flex flex-col items-center justify-center gap-1 focus:outline-none"
@@ -344,9 +346,9 @@ function BottomNav({ active, onNav }) {
                 borderRadius: 3, background: T.gold }} />}
               <div className="relative">
                 <Icon size={21} strokeWidth={on ? 2.4 : 2} />
-                {n.badge && <span style={{ position: "absolute", top: -5, right: -8, background: T.gold,
+                {badge ? <span style={{ position: "absolute", top: -5, right: -8, background: T.gold,
                   color: T.ink, fontFamily: mono, fontSize: 9, fontWeight: 700, borderRadius: 999,
-                  padding: "0px 4px", lineHeight: "14px" }}>{n.badge}</span>}
+                  padding: "0px 4px", lineHeight: "14px" }}>{badge}</span> : null}
               </div>
               <span style={{ fontSize: 10, fontWeight: on ? 650 : 500 }}>{n.short}</span>
             </button>
@@ -1317,6 +1319,7 @@ export default function App() {
   const [active, setActive] = useState("dashboard");
   const [session, setSession] = useState(() => getSession());
   const [loginOpen, setLoginOpen] = useState(false);
+  const [counts, setCounts] = useState({});
   const title = TITLES[active] || "Kashikeyo";
   const isCore = ["dashboard", "approval", "bills"].includes(active);
   const auth = {
@@ -1324,6 +1327,15 @@ export default function App() {
     onSignIn: () => setLoginOpen(true),
     onSignOut: () => { signOut(); setSession(null); },
   };
+  // Live nav badges: pending approvals + bill count. Refetch on login and nav
+  // so the counts reflect actions taken elsewhere in the app.
+  useEffect(() => {
+    let alive = true;
+    getDashboard()
+      .then((d) => { if (alive && d) setCounts({ approval: d.pendingApprovals, bills: d.billCount }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [session, active]);
 
   return (
     <div style={{ fontFamily: sans, color: T.text, minHeight: "100vh", display: "flex",
@@ -1335,7 +1347,7 @@ export default function App() {
         ::-webkit-scrollbar-thumb{background:${T.line};border-radius:8px}
         input::placeholder{color:${T.faint}}
       `}</style>
-      <Sidebar active={active} onNav={setActive} />
+      <Sidebar active={active} onNav={setActive} counts={counts} />
       <main className="flex-1 min-w-0 flex flex-col">
         <MobileHeader title={title} />
         <Topbar title={title} auth={auth} />
@@ -1347,7 +1359,7 @@ export default function App() {
           {!isCore && active !== "vendors" && <Placeholder id={active} />}
         </div>
       </main>
-      <BottomNav active={active} onNav={setActive} />
+      <BottomNav active={active} onNav={setActive} counts={counts} />
       {loginOpen && <LoginModal onClose={() => setLoginOpen(false)}
         onSignedIn={(s) => { setSession(s); setLoginOpen(false); }} />}
     </div>
