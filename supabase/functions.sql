@@ -285,3 +285,45 @@ as $$
 $$;
 
 grant execute on function public.org_vendors(uuid) to anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- GST filing (migration kashikeyo_ledger_org_gst_filings_fn)
+-- ---------------------------------------------------------------------------
+
+-- MIRA 205 (GGST) filing periods with computed output tax (from POS sales),
+-- claimable input tax (from purchase bills), and net GST payable.
+create or replace function public.org_gst_filings(p_org uuid)
+returns table(
+  id uuid, form text, period_start date, period_end date, due_date date, status text,
+  output_tax numeric, input_tax numeric, net_payable numeric
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select fp.id, fp.form::text, fp.period_start, fp.period_end, fp.due_date, fp.status::text,
+         coalesce(o.tax, 0) as output_tax,
+         coalesce(i.tax, 0) as input_tax,
+         coalesce(o.tax, 0) - coalesce(i.tax, 0) as net_payable
+  from filing_periods fp
+  left join lateral (
+    select sum(li.tax_amount) as tax
+    from transactions t
+    join transaction_line_items li on li.transaction_id = t.id
+    where t.organization_id = p_org and t.type = 'POS_SALE'
+      and li.tax_category = 'GGST'
+      and t.transaction_date between fp.period_start and fp.period_end
+  ) o on true
+  left join lateral (
+    select sum(li.tax_amount) as tax
+    from transactions t
+    join transaction_line_items li on li.transaction_id = t.id
+    where t.organization_id = p_org and t.type in ('PURCHASE_BILL', 'EXPENSE')
+      and li.tax_category = 'GGST' and li.input_tax_claimable
+      and t.transaction_date between fp.period_start and fp.period_end
+  ) i on true
+  where fp.organization_id = p_org and fp.form = 'MIRA_205_GGST'
+  order by fp.period_start;
+$$;
+
+grant execute on function public.org_gst_filings(uuid) to anon, authenticated, service_role;

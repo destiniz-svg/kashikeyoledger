@@ -16,11 +16,22 @@ import {
   type EntryRow,
   type LedgerStore,
   type RevenueSummary,
+  type GstFilingRow,
   type SaleInput,
   type SaleRow,
   type TrialBalanceRow,
   type VendorRow,
 } from "./store.ts";
+
+/** Demo GGST (MIRA 205) filing calendar, mirroring the seeded Supabase org. */
+const DEMO_FILINGS: GstFilingRow[] = [
+  { id: "f-1", form: "MIRA_205_GGST", periodStart: "2026-03-01", periodEnd: "2026-03-31", dueDate: "2026-04-28", status: "FILED", outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "f-2", form: "MIRA_205_GGST", periodStart: "2026-04-01", periodEnd: "2026-04-30", dueDate: "2026-05-28", status: "FILED", outputTax: 0, inputTax: 0, netPayable: 0 },
+  { id: "f-3", form: "MIRA_205_GGST", periodStart: "2026-05-01", periodEnd: "2026-05-31", dueDate: "2026-06-28", status: "FILED", outputTax: 0, inputTax: 844.37, netPayable: -844.37 },
+  { id: "f-4", form: "MIRA_205_GGST", periodStart: "2026-06-01", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", outputTax: 0, inputTax: 338.7, netPayable: -338.7 },
+  { id: "f-5", form: "MIRA_205_GGST", periodStart: "2026-07-01", periodEnd: "2026-07-31", dueDate: "2026-08-28", status: "UPCOMING", outputTax: 6, inputTax: 7280, netPayable: -7274 },
+  { id: "f-6", form: "MIRA_205_GGST", periodStart: "2026-08-01", periodEnd: "2026-08-31", dueDate: "2026-09-28", status: "UPCOMING", outputTax: 0, inputTax: 0, netPayable: 0 },
+];
 
 /** Demo purchase bills mirroring the seeded Supabase org (aging computed live). */
 const DEMO_BILLS: (Omit<BillRow, "aging"> & { dueIso: string })[] = [
@@ -182,6 +193,10 @@ export class MemoryStore implements LedgerStore {
 
   async verifyMember(): Promise<boolean> {
     return false; // no auth provider for the in-memory backend
+  }
+
+  async listGstFilings(): Promise<GstFilingRow[]> {
+    return DEMO_FILINGS.map((f) => ({ ...f }));
   }
 
   async listVendors(): Promise<VendorRow[]> {
