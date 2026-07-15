@@ -154,6 +154,48 @@ export function itemStatus(qty: number, threshold: number | null): string {
   return "in_stock";
 }
 
+/** Reconciliation states a bank line may be in (bank recon workflow). */
+export const RECON_STATUSES = ["UNMATCHED", "SUGGESTED", "MATCHED", "EXCLUDED"] as const;
+
+/** Direction of a bank statement line: money in (CREDIT) or out (DEBIT). */
+export const BANK_DIRECTIONS = ["DEBIT", "CREDIT"] as const;
+
+/** Signed amount for a bank line: CREDIT is money in (+), DEBIT is money out (−). */
+export function bankTxnSigned(direction: string, amount: number): number {
+  return direction === "CREDIT" ? amount : -amount;
+}
+
+/** A bank account with its current balance and reconciliation rollups. */
+export interface BankAccountRow {
+  id: string;
+  name: string;
+  bankName: string;
+  accountMasked: string;
+  currency: string;
+  linkedAccount: boolean; // mapped to a ledger account
+  balance: number; // current balance (latest running balance, or net of lines)
+  txnCount: number;
+  unreconciled: number; // lines still UNMATCHED or SUGGESTED
+}
+
+/** A single bank statement line, shaped for the Banking screen. */
+export interface BankTxnRow {
+  id: string;
+  accountId: string;
+  accountName: string;
+  date: string; // "05 Jul 2026"
+  isoDate: string;
+  type: string;
+  reference: string;
+  counterparty: string;
+  narrative: string;
+  direction: string; // "DEBIT" | "CREDIT"
+  amount: number; // signed: +credit, −debit
+  currency: string;
+  reconStatus: string; // one of RECON_STATUSES
+  matchedVendor: string | null;
+}
+
 /** A vendor with spend rollups, shaped for the Vendors screen. */
 export interface VendorRow {
   id: string;
@@ -219,6 +261,8 @@ export interface LedgerStore {
 
   listVendors(): Promise<VendorRow[]>;
   listItems(): Promise<ItemRow[]>;
+  listBankAccounts(): Promise<BankAccountRow[]>;
+  listBankTransactions(): Promise<BankTxnRow[]>;
   listGstFilings(): Promise<GstFilingRow[]>;
   /** Taxpayer identity for filings (organization name + TIN). */
   taxpayer(): Promise<{ name: string; tin: string }>;

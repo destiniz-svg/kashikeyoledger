@@ -11,9 +11,12 @@
 import {
   StoreError,
   agingBucket,
+  bankTxnSigned,
   formatBillDate,
   vendorInitials,
   type AccountRow,
+  type BankAccountRow,
+  type BankTxnRow,
   type BillRow,
   type EntryInput,
   type EntryRow,
@@ -410,6 +413,88 @@ export class SupabaseStore implements LedgerStore {
         status: itemStatus(qty, threshold),
       };
     });
+  }
+
+  async listBankAccounts(): Promise<BankAccountRow[]> {
+    const query =
+      `/rest/v1/bank_accounts?organization_id=eq.${this.org}&is_active=eq.true` +
+      `&select=id,name,bank_name,account_number_masked,currency,ledger_account_id,` +
+      `bank_transactions(direction,amount,running_balance,txn_date,recon_status)` +
+      `&order=name`;
+    const rows = (await this.#request(query)) as {
+      id: string;
+      name: string;
+      bank_name: string;
+      account_number_masked: string | null;
+      currency: string;
+      ledger_account_id: string | null;
+      bank_transactions: {
+        direction: string;
+        amount: string | number;
+        running_balance: string | number | null;
+        txn_date: string;
+        recon_status: string;
+      }[];
+    }[];
+    return rows.map((r) => {
+      const txns = [...r.bank_transactions].sort((a, b) => a.txn_date.localeCompare(b.txn_date));
+      const last = txns.at(-1);
+      // Prefer the latest statement running balance; else net the signed lines.
+      const balance =
+        last?.running_balance != null
+          ? Number(last.running_balance)
+          : txns.reduce((s, t) => s + bankTxnSigned(t.direction, Number(t.amount)), 0);
+      return {
+        id: r.id,
+        name: r.name,
+        bankName: r.bank_name,
+        accountMasked: r.account_number_masked ?? "",
+        currency: r.currency,
+        linkedAccount: r.ledger_account_id != null,
+        balance: Math.round(balance * 100) / 100,
+        txnCount: txns.length,
+        unreconciled: txns.filter((t) => ["UNMATCHED", "SUGGESTED"].includes(t.recon_status)).length,
+      };
+    });
+  }
+
+  async listBankTransactions(): Promise<BankTxnRow[]> {
+    const query =
+      `/rest/v1/bank_transactions?organization_id=eq.${this.org}` +
+      `&select=id,bank_account_id,txn_date,txn_type,bank_reference,counterparty,narrative,` +
+      `direction,amount,currency,recon_status,bank_accounts(name),vendors:matched_vendor_id(name)` +
+      `&order=txn_date.desc`;
+    const rows = (await this.#request(query)) as {
+      id: string;
+      bank_account_id: string;
+      txn_date: string;
+      txn_type: string | null;
+      bank_reference: string | null;
+      counterparty: string | null;
+      narrative: string | null;
+      direction: string;
+      amount: string | number;
+      currency: string;
+      recon_status: string;
+      bank_accounts: { name: string } | null;
+      vendors: { name: string } | null;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      accountId: r.bank_account_id,
+      accountName: r.bank_accounts?.name ?? "",
+      date: formatBillDate(r.txn_date),
+      isoDate: r.txn_date,
+      type: r.txn_type ?? "",
+      reference: r.bank_reference ?? "",
+      counterparty: r.counterparty ?? "",
+      narrative: r.narrative ?? "",
+      direction: r.direction,
+      amount: bankTxnSigned(r.direction, Number(r.amount)),
+      currency: r.currency,
+      reconStatus: r.recon_status,
+      matchedVendor: r.vendors?.name ?? null,
+    }));
   }
 
   async listGstFilings(): Promise<GstFilingRow[]> {

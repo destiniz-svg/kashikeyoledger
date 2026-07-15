@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MemoryStore } from "../src/memoryStore.ts";
-import { StoreError, agingBucket, computeSale, formatBillDate, validateEntry } from "../src/store.ts";
+import { StoreError, agingBucket, bankTxnSigned, computeSale, formatBillDate, validateEntry } from "../src/store.ts";
 
 test("a balanced entry posts and updates the trial balance", async () => {
   const s = new MemoryStore();
@@ -236,6 +236,38 @@ test("listVendors rolls up spend and bill count per vendor, sorted by spend", as
   assert.equal(vendors[0].billCount, 1);
   assert.equal(vendors[0].ini, "AL");
   for (const v of vendors) assert.equal(typeof v.ini, "string");
+});
+
+test("bankTxnSigned makes CREDIT positive and DEBIT negative", () => {
+  assert.equal(bankTxnSigned("CREDIT", 100), 100);
+  assert.equal(bankTxnSigned("DEBIT", 100), -100);
+});
+
+test("listBankAccounts reports balance, txn count and unreconciled count", async () => {
+  const accounts = await new MemoryStore().listBankAccounts();
+  assert.equal(accounts.length, 2);
+  const mvr = accounts.find((a) => a.currency === "MVR");
+  assert.equal(mvr?.name, "Business Current");
+  assert.equal(mvr?.linkedAccount, true);
+  assert.equal(mvr?.balance, 246048.63);
+  assert.equal(mvr?.txnCount, 11);
+  // UNMATCHED + SUGGESTED lines on the MVR account (2 + 3).
+  assert.equal(mvr?.unreconciled, 5);
+  const usd = accounts.find((a) => a.currency === "USD");
+  assert.equal(usd?.linkedAccount, false);
+  assert.equal(usd?.unreconciled, 2);
+});
+
+test("listBankTransactions signs amounts by direction and labels the account", async () => {
+  const txns = await new MemoryStore().listBankTransactions();
+  assert.equal(txns.length, 13);
+  const credit = txns.find((t) => t.reference === "FT26060312");
+  assert.equal(credit?.amount, 45000); // CREDIT stays positive
+  assert.equal(credit?.accountName, "Business Current");
+  const debit = txns.find((t) => t.reference === "FT26060544");
+  assert.equal(debit?.amount, -98280); // DEBIT is negative
+  assert.equal(debit?.matchedVendor, "Altura Pvt Ltd");
+  assert.equal(debit?.date, "05 Jun 2026");
 });
 
 test("recordSale stores a sale and revenue sums it within a date range", async () => {
