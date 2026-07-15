@@ -1,0 +1,30 @@
+{
+  "name": "kashikeyo-ledger",
+  "version": "0.1.0",
+  "description": "A double-entry accounting ledger core, in dependency-free TypeScript.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "demo": "node src/demo.ts"
+  },
+  "keywords": [
+    "ledger",
+    "accounting",
+    "double-entry",
+    "bookkeeping",
+    "finance"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
