@@ -4,6 +4,7 @@ import { getSession, signOut } from "./auth.js";
 import { T, sans, mono } from "./theme.js";
 import { Sidebar, BottomNav, MobileHeader, Topbar } from "./nav.jsx";
 import { LoginModal } from "./LoginModal.jsx";
+import { Landing } from "./Landing.jsx";
 
 // Each screen is its own code-split chunk, loaded on first navigation. This
 // keeps heavy per-screen deps (recharts on Dashboard, pdf-lib on Tax filing)
@@ -88,22 +89,37 @@ export default function App() {
   const [session, setSession] = useState(() => getSession());
   const [loginOpen, setLoginOpen] = useState(false);
   const [counts, setCounts] = useState({});
+  // Returning signed-in users skip the landing page and go straight to the app.
+  const [view, setView] = useState(() => (getSession() ? "app" : "landing"));
   const title = TITLES[active] || "Kashikeyo";
   const isCore = ["dashboard", "approval", "bills"].includes(active);
+  const onSignedIn = (s) => { setSession(s); setLoginOpen(false); setView("app"); };
   const auth = {
     session,
     onSignIn: () => setLoginOpen(true),
     onSignOut: () => { signOut(); setSession(null); },
   };
+
   // Live nav badges: pending approvals + bill count. Refetch on login and nav
-  // so the counts reflect actions taken elsewhere in the app.
+  // so the counts reflect actions taken elsewhere in the app. Only runs once
+  // the app view is active (skipped on the landing page).
   useEffect(() => {
+    if (view !== "app") return;
     let alive = true;
     getDashboard()
       .then((d) => { if (alive && d) setCounts({ approval: d.pendingApprovals, bills: d.billCount }); })
       .catch(() => {});
     return () => { alive = false; };
-  }, [session, active]);
+  }, [session, active, view]);
+
+  if (view === "landing") {
+    return (
+      <>
+        <Landing onSignIn={() => setLoginOpen(true)} onEnter={() => setView("app")} />
+        {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />}
+      </>
+    );
+  }
 
   return (
     <div style={{ fontFamily: sans, color: T.text, minHeight: "100vh", display: "flex",
@@ -139,8 +155,7 @@ export default function App() {
         </div>
       </main>
       <BottomNav active={active} onNav={setActive} counts={counts} />
-      {loginOpen && <LoginModal onClose={() => setLoginOpen(false)}
-        onSignedIn={(s) => { setSession(s); setLoginOpen(false); }} />}
+      {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />}
     </div>
   );
 }
