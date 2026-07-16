@@ -6,12 +6,14 @@ import {
   DEFAULT_GEMINI_MODEL,
   EXTRACTION_TOOL,
   GEMINI_EXTRACTION_SCHEMA,
+  bankLineFromExtraction,
   buildExtractionRequest,
   buildGeminiRequest,
   deriveValidationFlags,
   extractDocument,
   extractDocumentGemini,
   hasProvider,
+  isBankDocument,
   isPdfMedia,
   mediaTypeFor,
   normalizeExtraction,
@@ -240,6 +242,77 @@ test("extractDocument surfaces an API error message", async () => {
 
 test("every allowed upload MIME maps cleanly", () => {
   for (const mt of ALLOWED_UPLOAD_MIME) assert.equal(mediaTypeFor(mt), mt);
+});
+
+/* -- Bank / cash documents (document-type-aware) ---------------------------- */
+
+const depositSlip = () => normalizeExtraction({
+  document_type: "BANK_DEPOSIT",
+  direction: "IN",
+  bank_name: "Bank of Maldives",
+  bank_account_ref: "7730000012345",
+  counterparty: "ALTURA PVT LTD",
+  reference: "DEP-99182",
+  currency: "MVR",
+  document_date: "2026-07-14",
+  line_items: [],
+  grand_total: 51000,
+  predicted_tax_category: "OUT_OF_SCOPE",
+  confidence_score: 0.9,
+  ai_reasoning: "Cash deposit — out of scope for GST.",
+});
+
+test("isBankDocument recognises a bank deposit slip", () => {
+  const e = depositSlip();
+  assert.equal(isBankDocument(e), true);
+  assert.equal(e.direction, "IN");
+  assert.equal(e.counterparty, "ALTURA PVT LTD");
+});
+
+test("bank documents are not flagged for missing vendor TIN / invoice / line items", () => {
+  const flags = deriveValidationFlags(depositSlip());
+  assert.ok(!flags.includes("MISSING_VENDOR_TIN"));
+  assert.ok(!flags.includes("MISSING_INVOICE_NUMBER"));
+  assert.ok(!flags.includes("NO_LINE_ITEMS"));
+  assert.deepEqual(flags, []); // clean deposit slip
+});
+
+test("a bank document missing amount/direction is flagged for reconciliation", () => {
+  const e = normalizeExtraction({
+    document_type: "BANK_WITHDRAWAL", currency: "MVR", line_items: [],
+    predicted_tax_category: "OUT_OF_SCOPE", confidence_score: 0.9, ai_reasoning: "",
+  });
+  const flags = deriveValidationFlags(e);
+  assert.ok(flags.includes("MISSING_AMOUNT"));
+  assert.ok(flags.includes("UNKNOWN_DIRECTION"));
+});
+
+test("bankLineFromExtraction maps a deposit to a CREDIT statement line", () => {
+  const line = bankLineFromExtraction(depositSlip());
+  assert.equal(line?.direction, "CREDIT");
+  assert.equal(line?.amount, 51000);
+  assert.equal(line?.reference, "DEP-99182");
+  assert.equal(line?.counterparty, "ALTURA PVT LTD");
+  assert.match(line?.narrative ?? "", /bank deposit/i);
+});
+
+test("bankLineFromExtraction maps a withdrawal/payment to DEBIT and returns null with no amount", () => {
+  const out = bankLineFromExtraction(normalizeExtraction({
+    document_type: "PAYMENT_VOUCHER", direction: "OUT", currency: "MVR",
+    grand_total: 1200, line_items: [], predicted_tax_category: "OUT_OF_SCOPE",
+    confidence_score: 0.9, ai_reasoning: "",
+  }));
+  assert.equal(out?.direction, "DEBIT");
+  const none = bankLineFromExtraction(normalizeExtraction({
+    document_type: "BANK_TRANSFER", direction: "IN", currency: "MVR",
+    line_items: [], predicted_tax_category: "OUT_OF_SCOPE", confidence_score: 0.9, ai_reasoning: "",
+  }));
+  assert.equal(none, null);
+});
+
+test("the Gemini schema carries the banking fields", () => {
+  assert.ok(GEMINI_EXTRACTION_SCHEMA.properties.direction);
+  assert.ok(GEMINI_EXTRACTION_SCHEMA.properties.counterparty);
 });
 
 /* -- Gemini provider -------------------------------------------------------- */

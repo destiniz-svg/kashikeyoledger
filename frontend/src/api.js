@@ -60,6 +60,8 @@ export const uploadDocument = (filename, contentType, dataBase64, captureSource)
   post("/documents", { filename, contentType, dataBase64, captureSource });
 export const overrideDocument = (id, override) =>
   post(`/documents/${encodeURIComponent(id)}/override`, override);
+export const postDocumentToBank = (id, bankAccountId) =>
+  post(`/documents/${encodeURIComponent(id)}/post-to-bank`, bankAccountId ? { bankAccountId } : undefined);
 export const getRules = () => get("/rules");
 export const deleteRule = (id) => del(`/rules/${encodeURIComponent(id)}`);
 

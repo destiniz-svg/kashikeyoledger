@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ScanLine, UploadCloud, FileText, Image as ImageIcon, Check, AlertTriangle,
-  Sparkles, ChevronDown, X, Pencil, Wand2, Trash2 } from "lucide-react";
-import { getDocuments, uploadDocument, overrideDocument, getRules, deleteRule } from "./api.js";
+  Sparkles, ChevronDown, X, Pencil, Wand2, Trash2, Landmark, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { getDocuments, uploadDocument, overrideDocument, postDocumentToBank, getRules, deleteRule } from "./api.js";
 import { T, mono, num, fmt, fmtDate, useW } from "./theme.js";
 import { Eyebrow, KpiTile, TaxChip } from "./ui.jsx";
+
+const BANK_TYPES = ["BANK_DEPOSIT", "BANK_WITHDRAWAL", "BANK_TRANSFER", "BANK_STATEMENT", "PAYMENT_VOUCHER"];
+const isBankDoc = (e) => !!e && (BANK_TYPES.includes((e.documentType || "").toUpperCase()) || (!!e.direction && (e.lines?.length ?? 0) === 0));
+const prettyType = (t) => String(t || "Document").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 
 const TAX_OPTIONS = [
   ["GGST", "GGST 8%"],
@@ -119,6 +123,37 @@ const SAMPLE_DOCS = [
       validationFlags: [],
     },
   },
+  {
+    id: "doc-sample-3",
+    fileName: "bml-cash-deposit-slip.jpg",
+    mimeType: "image/jpeg",
+    byteSize: 210_880,
+    status: "EXTRACTED",
+    captureSource: "MANUAL_UPLOAD",
+    createdAt: "2026-07-14T16:40:00.000Z",
+    model: "AI · sample",
+    extraction: {
+      documentType: "BANK_DEPOSIT",
+      direction: "IN",
+      bankName: "Bank of Maldives",
+      bankAccountRef: "•••• 4021",
+      counterparty: "Altura Pvt Ltd",
+      reference: "DEP-26071401",
+      vendorName: null, vendorTin: null, invoiceNumber: null,
+      documentDate: "2026-07-14", dueDate: null,
+      currency: "MVR", fxRateToMvr: null,
+      lines: [],
+      subtotal: null, taxTotal: null, grandTotal: 51000,
+      accountingCategory: null,
+      predictedTaxCategory: "OUT_OF_SCOPE",
+      confidenceScore: 0.9,
+      aiReasoning:
+        "A Bank of Maldives cash deposit of MVR 51,000. Cash movements are out of " +
+        "scope for GST — post it to Banking to reconcile against the statement.",
+      fieldConfidence: { grand_total: 0.95, document_date: 0.9 },
+      validationFlags: [],
+    },
+  },
 ];
 
 const readAsBase64 = (file) =>
@@ -142,11 +177,14 @@ function ConfidenceBar({ score }) {
   );
 }
 
-function DocRow({ doc, onOverride }) {
+function DocRow({ doc, onOverride, onPostToBank }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [posting, setPosting] = useState(false);
   const e = doc.extraction;
+  const bank = isBankDoc(e);
+  const inflow = e?.direction === "IN";
   const isPdf = doc.mimeType === "application/pdf";
   const flags = e?.validationFlags || [];
   const failed = doc.status === "EXTRACTION_FAILED";
@@ -165,6 +203,11 @@ function DocRow({ doc, onOverride }) {
       setEditing(false);
     } finally { setSaving(false); }
   }
+  async function postBank() {
+    if (posting) return;
+    setPosting(true);
+    try { await onPostToBank(doc.id); } finally { setPosting(false); }
+  }
 
   return (
     <div style={{ borderTop: `1px solid ${T.line2}` }}>
@@ -178,17 +221,24 @@ function DocRow({ doc, onOverride }) {
         <div className="min-w-0 flex-1">
           <div style={{ fontSize: 13.5, fontWeight: 600, color: T.text, overflow: "hidden",
             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {e?.vendorName || doc.fileName}</div>
+            {(bank ? (e.counterparty || e.bankName) : e?.vendorName) || doc.fileName}</div>
           <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, overflow: "hidden",
             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {e ? `${e.invoiceNumber || "—"} · ${fmtDate(e.documentDate)}` : doc.fileName}
-            {e?.vendorTin ? ` · TIN ${e.vendorTin}` : ""}</div>
+            {e ? bank
+              ? `${prettyType(e.documentType)} · ${e.reference || "—"} · ${fmtDate(e.documentDate)}`
+              : `${e.invoiceNumber || "—"} · ${fmtDate(e.documentDate)}${e.vendorTin ? ` · TIN ${e.vendorTin}` : ""}`
+              : doc.fileName}</div>
         </div>
-        {e && <TaxChip c={e.predictedTaxCategory} />}
+        {e && (bank
+          ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+              fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", borderRadius: 999, padding: "3px 9px",
+              background: inflow ? T.claimSoft : "#EEF1EF", color: inflow ? T.claim : T.muted }}>
+              {inflow ? <ArrowDownLeft size={11} /> : <ArrowUpRight size={11} />}{inflow ? "Money in" : "Money out"}</span>
+          : <TaxChip c={e.predictedTaxCategory} />)}
         <div className="hidden sm:block" style={{ textAlign: "right", minWidth: 96 }}>
           {e?.grandTotal != null && (
-            <div style={{ ...num, fontSize: 13, fontWeight: 650, color: T.text }}>
-              {fmt(e.grandTotal, e.currency)}</div>
+            <div style={{ ...num, fontSize: 13, fontWeight: 650, color: bank ? (inflow ? T.claim : T.text) : T.text }}>
+              {bank ? (inflow ? "+" : "−") : ""}{fmt(e.grandTotal, e.currency)}</div>
           )}
           {e && <div style={{ marginTop: 3 }}><ConfidenceBar score={e.confidenceScore} /></div>}
         </div>
@@ -226,12 +276,14 @@ function DocRow({ doc, onOverride }) {
                 background: T.warnSoft, padding: "3px 9px", borderRadius: 999 }}>
                 <AlertTriangle size={11} />{flagText(f)}</span>
             ))}
-            <button onClick={() => setEditing((v) => !v)}
-              style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5,
-                fontFamily: mono, fontSize: 10.5, fontWeight: 600, color: T.muted,
-                border: `1px solid ${T.line}`, background: T.surface, borderRadius: 999,
-                padding: "4px 10px", cursor: "pointer" }}>
-              <Pencil size={11} />{editing ? "Close" : "Correct"}</button>
+            {!bank && (
+              <button onClick={() => setEditing((v) => !v)}
+                style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5,
+                  fontFamily: mono, fontSize: 10.5, fontWeight: 600, color: T.muted,
+                  border: `1px solid ${T.line}`, background: T.surface, borderRadius: 999,
+                  padding: "4px 10px", cursor: "pointer" }}>
+                <Pencil size={11} />{editing ? "Close" : "Correct"}</button>
+            )}
           </div>
 
           {/* Override editor */}
@@ -276,7 +328,32 @@ function DocRow({ doc, onOverride }) {
             <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.5 }}>{e.aiReasoning || "—"}</div>
           </div>
 
-          {/* Line items */}
+          {/* Bank / cash document → route to Banking instead of a tax table */}
+          {bank ? (
+            <div className="rounded-xl p-3.5" style={{ border: `1px solid ${T.line}`, background: T.surface }}>
+              <div className="flex items-center gap-1.5 mb-2.5">
+                <Landmark size={13} color={T.teal} /><Eyebrow>Bank / cash movement</Eyebrow>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-5 gap-y-2.5">
+                <BankField label="Direction" v={inflow ? "Money in (credit)" : "Money out (debit)"} />
+                <BankField label="Amount" v={`${inflow ? "+" : "−"}${fmt(e.grandTotal ?? 0, e.currency)}`} strong />
+                <BankField label="Date" v={fmtDate(e.documentDate)} />
+                <BankField label="Bank" v={e.bankName || "—"} />
+                <BankField label="Account" v={e.bankAccountRef || "—"} />
+                <BankField label="Reference" v={e.reference || "—"} />
+                <BankField label="Counterparty" v={e.counterparty || "—"} />
+              </div>
+              <div className="flex items-center gap-2 mt-3.5" style={{ borderTop: `1px solid ${T.line2}`, paddingTop: 12 }}>
+                <button onClick={postBank} disabled={posting}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.ink, color: "#fff",
+                    borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 600,
+                    cursor: posting ? "default" : "pointer", opacity: posting ? 0.7 : 1 }}>
+                  <Landmark size={14} />{posting ? "Posting…" : "Post to Banking"}</button>
+                <span style={{ fontSize: 11.5, color: T.faint }}>
+                  Adds an unreconciled line to the matching account for you to match.</span>
+              </div>
+            </div>
+          ) : (
           <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.line}`, background: T.surface }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr style={{ background: T.paper }}>
@@ -314,6 +391,7 @@ function DocRow({ doc, onOverride }) {
                 {doc.model || "—"}</span>
             </div>
           </div>
+          )}
         </div>
       )}
     </div>
@@ -324,6 +402,13 @@ const Total = ({ label, v, strong }) => (
     <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: T.faint }}>{label}</span>
     <span style={{ ...num, fontSize: strong ? 13 : 12, fontWeight: strong ? 700 : 600, color: T.text }}>{v}</span>
   </span>
+);
+const BankField = ({ label, v, strong }) => (
+  <div className="min-w-0">
+    <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: "0.06em", textTransform: "uppercase", color: T.faint }}>{label}</div>
+    <div style={{ fontSize: strong ? 14 : 12.5, fontWeight: strong ? 700 : 550, color: T.text, marginTop: 2,
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</div>
+  </div>
 );
 
 export function AIInbox({ session, onRequireLogin }) {
@@ -376,6 +461,24 @@ export function AIInbox({ session, onRequireLogin }) {
     if (live && !session) { onRequireLogin(); return; }
     if (live) { try { await deleteRule(id); await loadRules(); } catch { setErr("Couldn't remove that rule."); } }
     else setRules((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  // Post a bank/cash document into the Banking module for reconciliation.
+  async function handlePostToBank(docId) {
+    if (live && !session) { onRequireLogin(); return; }
+    setErr(null); setNote(null);
+    if (live) {
+      try {
+        const res = await postDocumentToBank(docId);
+        setNote(res?.duplicates
+          ? "Already posted to Banking — nothing added."
+          : `Posted to ${res?.bankAccountName || "Banking"} — reconcile it under Banking.`);
+      } catch (ex) {
+        setErr(String(ex?.message || "").includes("401") ? "Please sign in to post to Banking." : "Couldn't post to Banking.");
+      }
+    } else {
+      setNote("Sample mode — this deposit would be posted to Banking for reconciliation. Sign in to do it live.");
+    }
   }
 
   async function handleFiles(fileList) {
@@ -480,7 +583,7 @@ export function AIInbox({ session, onRequireLogin }) {
           <div style={{ padding: "34px 16px", textAlign: "center", fontFamily: mono, fontSize: 12, color: T.faint }}>
             No documents yet — upload one above to get started.</div>
         ) : (
-          docs.map((d) => <DocRow key={d.id} doc={d} onOverride={handleOverride} />)
+          docs.map((d) => <DocRow key={d.id} doc={d} onOverride={handleOverride} onPostToBank={handlePostToBank} />)
         )}
       </div>
 

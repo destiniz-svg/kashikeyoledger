@@ -31,6 +31,7 @@ import {
   type OrgSettings,
   type OrgSettingsPatch,
   type OverrideResult,
+  type PostToBankResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -45,7 +46,9 @@ import {
 } from "./store.ts";
 import {
   DEFAULT_EXTRACTION_MODEL,
+  bankLineFromExtraction,
   deriveValidationFlags,
+  isBankDocument,
   mediaTypeFor,
   normalizeExtraction,
   type Extraction,
@@ -63,12 +66,36 @@ import {
 
 /**
  * A canned extraction so the AI ingestion flow works end-to-end on the in-memory
- * backend (no Supabase, no Anthropic key). Modelled on a typical Maldivian
- * hardware-supplier invoice; validation flags are derived the same way as live.
+ * backend (no Supabase, no Anthropic key). Returns a bank deposit slip when the
+ * filename hints a banking document, else a typical hardware-supplier invoice;
+ * validation flags are derived the same way as live.
  */
 function cannedExtraction(filename: string): Extraction {
+  if (/deposit|withdraw|bank|slip|transfer|voucher|remit/i.test(filename)) {
+    const b = normalizeExtraction({
+      document_type: "BANK_DEPOSIT",
+      direction: "IN",
+      bank_name: "Bank of Maldives",
+      bank_account_ref: "•••• 4021",
+      counterparty: "Altura Pvt Ltd",
+      reference: "DEP-26071401",
+      currency: "MVR",
+      document_date: "2026-07-14",
+      line_items: [],
+      grand_total: 51000,
+      predicted_tax_category: "OUT_OF_SCOPE",
+      confidence_score: 0.9,
+      ai_reasoning:
+        `Sample extraction for "${filename}". A Bank of Maldives cash deposit of ` +
+        "MVR 51,000. Cash movements are out of scope for GST — post it to Banking " +
+        "for reconciliation.",
+      field_confidence: { grand_total: 0.95, document_date: 0.9 },
+    });
+    b.validationFlags = deriveValidationFlags(b);
+    return b;
+  }
   const e = normalizeExtraction({
-    document_type: "INVOICE",
+    document_type: "PURCHASE_INVOICE",
     vendor_name: "Island Mark Hardware Pvt Ltd",
     vendor_tin: null,
     invoice_number: "IMH-4471",
@@ -572,6 +599,37 @@ export class MemoryStore implements LedgerStore {
     if (!rule) throw new StoreError(`Rule "${id}" not found`, 404);
     rule.isActive = false;
     return { id };
+  }
+
+  async postDocumentToBank(
+    documentId: string,
+    bankAccountId: string | null = null,
+  ): Promise<PostToBankResult> {
+    const doc = this.#documents.find((d) => d.id === documentId);
+    if (!doc || !doc.extraction) {
+      throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    }
+    if (!isBankDocument(doc.extraction)) {
+      throw new StoreError("This document isn't a bank or cash movement", 422);
+    }
+    const line = bankLineFromExtraction(doc.extraction);
+    if (!line) throw new StoreError("The document has no amount to post to Banking", 422);
+
+    const accounts = await this.listBankAccounts();
+    const target =
+      accounts.find((a) => a.id === bankAccountId) ??
+      accounts.find((a) => a.currency === doc.extraction!.currency) ??
+      accounts[0];
+    if (!target) throw new StoreError("No bank account to post into", 422);
+
+    const res = await this.importStatement(target.id, "PDF_UPLOAD", [line]);
+    return {
+      documentId,
+      bankAccountId: target.id,
+      bankAccountName: target.name,
+      imported: res.imported,
+      duplicates: res.duplicates,
+    };
   }
 
   async mvrPerUsd(): Promise<number> {

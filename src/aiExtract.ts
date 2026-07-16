@@ -31,8 +31,42 @@ export const ALLOWED_UPLOAD_MIME = [
   "application/pdf",
 ] as const;
 
-/** Document kinds the extractor recognises. */
-export const DOCUMENT_TYPES = ["INVOICE", "RECEIPT", "BILL", "STATEMENT", "OTHER"] as const;
+/**
+ * Document kinds the extractor recognises — not just purchase invoices. Bank /
+ * cash documents (deposit & withdrawal slips, transfer confirmations, statements,
+ * payment vouchers) are first-class so they route to the Banking module instead
+ * of being forced into the GST/vendor shape.
+ */
+export const DOCUMENT_TYPES = [
+  "PURCHASE_INVOICE",
+  "SALES_INVOICE",
+  "BILL",
+  "RECEIPT",
+  "CREDIT_NOTE",
+  "BANK_DEPOSIT",
+  "BANK_WITHDRAWAL",
+  "BANK_TRANSFER",
+  "BANK_STATEMENT",
+  "PAYMENT_VOUCHER",
+  "OTHER",
+] as const;
+
+/** Document types that belong in the Banking module, not the bills/GST flow. */
+export const BANK_DOCUMENT_TYPES = [
+  "BANK_DEPOSIT",
+  "BANK_WITHDRAWAL",
+  "BANK_TRANSFER",
+  "BANK_STATEMENT",
+  "PAYMENT_VOUCHER",
+] as const;
+
+/** True when an extraction describes a banking/cash movement (not a purchase). */
+export function isBankDocument(e: Pick<Extraction, "documentType" | "direction" | "lines">): boolean {
+  const t = String(e.documentType || "").toUpperCase();
+  if ((BANK_DOCUMENT_TYPES as readonly string[]).includes(t)) return true;
+  // A money movement with a direction and no itemised lines is bank-like.
+  return Boolean(e.direction) && (e.lines?.length ?? 0) === 0;
+}
 
 /** A single extracted line item. */
 export interface ExtractionLine {
@@ -74,6 +108,17 @@ export interface Extraction {
   aiReasoning: string;
   fieldConfidence: Record<string, number>;
   validationFlags: string[];
+  // --- Banking / cash-movement fields (populated for bank documents) ---
+  /** Money direction for a bank/cash document: IN (received) or OUT (paid). */
+  direction: string | null;
+  /** The bank shown on the document (e.g. "Bank of Maldives"). */
+  bankName: string | null;
+  /** The account number / reference shown on the slip. */
+  bankAccountRef: string | null;
+  /** The other party — depositor, payee, beneficiary or sender. */
+  counterparty: string | null;
+  /** Slip / transaction reference number. */
+  reference: string | null;
   /** A learned rule that was auto-applied to this extraction (Phase 3), if any. */
   appliedRule?: AppliedRule | null;
   /** True once a human has corrected this extraction (Phase 3). */
@@ -105,13 +150,30 @@ const TAX_ENUM = TAX_CATEGORIES as readonly string[];
 export const EXTRACTION_TOOL = {
   name: "record_extraction",
   description:
-    "Record the data read from a Maldivian purchase invoice, bill or receipt. " +
-    "Call this exactly once with everything you can read from the document.",
+    "Record the data read from any Maldivian accounting document — a purchase or " +
+    "sales invoice, bill, receipt, credit note, OR a bank/cash document such as a " +
+    "deposit slip, withdrawal slip, transfer confirmation, statement or payment " +
+    "voucher. Call this exactly once with everything you can read.",
   input_schema: {
     type: "object",
     properties: {
       document_type: { type: "string", enum: [...DOCUMENT_TYPES] },
-      vendor_name: { type: ["string", "null"], description: "Supplier / merchant name" },
+      direction: {
+        type: ["string", "null"],
+        enum: ["IN", "OUT", null],
+        description:
+          "For a bank/cash document, the money direction from the account holder's " +
+          "view: IN for a deposit/receipt/credit, OUT for a withdrawal/payment/debit. " +
+          "Null for a purchase/sales document.",
+      },
+      bank_name: { type: ["string", "null"], description: "Bank shown on the document, e.g. Bank of Maldives" },
+      bank_account_ref: { type: ["string", "null"], description: "Account number/reference printed on the slip" },
+      counterparty: {
+        type: ["string", "null"],
+        description: "The other party — depositor, payee, beneficiary or sender (bank/cash documents)",
+      },
+      reference: { type: ["string", "null"], description: "Slip / transaction reference number" },
+      vendor_name: { type: ["string", "null"], description: "Supplier / merchant name (purchase documents)" },
       vendor_tin: {
         type: ["string", "null"],
         description:
@@ -193,8 +255,30 @@ export const EXTRACTION_TOOL = {
 
 export const EXTRACTION_SYSTEM_PROMPT = [
   "You are the bookkeeping AI for Kashikeyo Ledger, an accounting service for",
-  "businesses in the Maldives. You read a supplier invoice, bill or receipt and",
-  "return its data by calling the record_extraction tool exactly once.",
+  "businesses in the Maldives. You read ANY accounting document and return its",
+  "data by calling the record_extraction tool exactly once.",
+  "",
+  "First, classify the document (document_type):",
+  "- PURCHASE_INVOICE / BILL — a supplier billing the business (accounts payable).",
+  "- SALES_INVOICE / RECEIPT — the business billing a customer, or a paid receipt.",
+  "- CREDIT_NOTE — a refund/adjustment to a prior invoice.",
+  "- BANK_DEPOSIT / BANK_WITHDRAWAL — a bank counter deposit or withdrawal slip.",
+  "- BANK_TRANSFER — a transfer / remittance confirmation.",
+  "- BANK_STATEMENT — a bank account statement.",
+  "- PAYMENT_VOUCHER — a payment authorisation/voucher.",
+  "- OTHER — anything else.",
+  "",
+  "For BANK/CASH documents (deposit/withdrawal/transfer/statement/voucher):",
+  "- Set `direction`: IN for a deposit/credit/money received, OUT for a",
+  "  withdrawal/payment/money paid (from the account holder's point of view).",
+  "- Fill `bank_name`, `bank_account_ref`, `counterparty` (depositor/payee/",
+  "  beneficiary) and `reference` (slip/transaction number). Put the total in",
+  "  `grand_total`. These are cash movements, NOT taxable supplies: leave",
+  "  line_items empty, set predicted_tax_category to OUT_OF_SCOPE, and do not",
+  "  expect a vendor TIN or invoice number.",
+  "",
+  "For PURCHASE/SALES documents, set direction to null and extract vendor, TIN,",
+  "invoice number, line items and tax as below.",
   "",
   "Maldivian context you must apply:",
   "- The local currency is the Maldivian Rufiyaa (ISO code MVR; often written Rf,",
@@ -297,6 +381,7 @@ export function normalizeExtraction(raw: unknown): Extraction {
     const n = numOrNull(v);
     if (n != null) fieldConfidence[k] = clamp01(n);
   }
+  const dir = String(r.direction ?? "").trim().toUpperCase();
   return {
     documentType: String(r.document_type ?? "OTHER").trim().toUpperCase(),
     vendorName: strOrNull(r.vendor_name),
@@ -316,6 +401,11 @@ export function normalizeExtraction(raw: unknown): Extraction {
     aiReasoning: String(r.ai_reasoning ?? "").trim(),
     fieldConfidence,
     validationFlags: [],
+    direction: dir === "IN" || dir === "OUT" ? dir : null,
+    bankName: strOrNull(r.bank_name),
+    bankAccountRef: strOrNull(r.bank_account_ref),
+    counterparty: strOrNull(r.counterparty),
+    reference: strOrNull(r.reference),
     appliedRule: (r.appliedRule as Extraction["appliedRule"]) ?? null,
     overridden: Boolean(r.overridden),
   };
@@ -330,15 +420,26 @@ export function deriveValidationFlags(e: Extraction): string[] {
   const flags: string[] = [];
   const near = (a: number, b: number, tol = 1) => Math.abs(a - b) <= tol;
 
+  // Foreign currency without a rate and low confidence apply to every document.
+  if (e.currency && e.currency !== "MVR" && !e.fxRateToMvr) flags.push("FOREIGN_CURRENCY_NO_FX");
+  if (e.confidenceScore < 0.6) flags.push("LOW_CONFIDENCE");
+
+  // Bank / cash documents are money movements, not taxable supplies — the
+  // vendor-TIN / invoice / line-item / tax checks don't apply. Check the fields
+  // that matter for reconciliation instead.
+  if (isBankDocument(e)) {
+    if (e.grandTotal == null) flags.push("MISSING_AMOUNT");
+    if (!e.direction) flags.push("UNKNOWN_DIRECTION");
+    if (!e.documentDate) flags.push("MISSING_DATE");
+    return flags;
+  }
+
   if (!e.vendorName) flags.push("MISSING_VENDOR_NAME");
   if (!e.vendorTin) flags.push("MISSING_VENDOR_TIN");
   if (!e.invoiceNumber) flags.push("MISSING_INVOICE_NUMBER");
   if (!e.documentDate) flags.push("MISSING_DATE");
   if (e.lines.length === 0) flags.push("NO_LINE_ITEMS");
 
-  if (e.currency && e.currency !== "MVR" && !e.fxRateToMvr) {
-    flags.push("FOREIGN_CURRENCY_NO_FX");
-  }
   if (e.subtotal != null && e.taxTotal != null && e.grandTotal != null) {
     if (!near(e.subtotal + e.taxTotal, e.grandTotal)) flags.push("TOTALS_MISMATCH");
   }
@@ -350,9 +451,32 @@ export function deriveValidationFlags(e: Extraction): string[] {
   // vice-versa — surface a mix so a human can confirm the sector.
   const cats = new Set(e.lines.map((l) => l.taxCategory));
   if (cats.size > 1) flags.push("MIXED_TAX_CATEGORIES");
-  if (e.confidenceScore < 0.6) flags.push("LOW_CONFIDENCE");
 
   return flags;
+}
+
+/**
+ * Shape a bank/cash extraction into a statement line for the Banking module.
+ * Returns null when there's nothing bankable (no amount). IN→CREDIT, OUT→DEBIT;
+ * a missing direction defaults to DEBIT (money out) as the safer assumption.
+ */
+export function bankLineFromExtraction(e: Extraction): {
+  date: string; direction: string; amount: number;
+  reference: string | null; counterparty: string | null; narrative: string | null; type: string;
+} | null {
+  const amount = e.grandTotal ?? e.subtotal;
+  if (amount == null || amount <= 0) return null;
+  const party = e.counterparty ?? e.vendorName ?? null;
+  const pretty = String(e.documentType || "Bank document").replace(/_/g, " ").toLowerCase();
+  return {
+    date: e.documentDate ?? new Date().toISOString().slice(0, 10),
+    direction: e.direction === "IN" ? "CREDIT" : "DEBIT",
+    amount: Math.round(amount * 100) / 100,
+    reference: e.reference ?? e.invoiceNumber,
+    counterparty: party,
+    narrative: [pretty, party].filter(Boolean).join(" — ") || pretty,
+    type: e.documentType,
+  };
 }
 
 /** Pull the record_extraction tool input out of a Messages API response body. */
@@ -432,6 +556,11 @@ export const GEMINI_EXTRACTION_SCHEMA = {
   type: "OBJECT",
   properties: {
     document_type: { type: "STRING", enum: [...DOCUMENT_TYPES] },
+    direction: { type: "STRING", enum: ["IN", "OUT"], nullable: true },
+    bank_name: { type: "STRING", nullable: true },
+    bank_account_ref: { type: "STRING", nullable: true },
+    counterparty: { type: "STRING", nullable: true },
+    reference: { type: "STRING", nullable: true },
     vendor_name: { type: "STRING", nullable: true },
     vendor_tin: { type: "STRING", nullable: true },
     invoice_number: { type: "STRING", nullable: true },

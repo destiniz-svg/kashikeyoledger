@@ -33,6 +33,7 @@ import {
   type OrgSettings,
   type OrgSettingsPatch,
   type OverrideResult,
+  type PostToBankResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -46,7 +47,9 @@ import {
   type VendorRow,
 } from "./store.ts";
 import {
+  bankLineFromExtraction,
   hasProvider,
+  isBankDocument,
   mediaTypeFor,
   runExtraction,
   type Extraction,
@@ -1040,6 +1043,39 @@ export class SupabaseStore implements LedgerStore {
       if (input) rule = await this.#upsertRule(input);
     }
     return { documentId, extraction, rule };
+  }
+
+  async postDocumentToBank(
+    documentId: string,
+    bankAccountId: string | null = null,
+  ): Promise<PostToBankResult> {
+    const rows = (await this.#request(
+      `/rest/v1/ai_extractions?document_id=eq.${documentId}&organization_id=eq.${this.org}` +
+        `&select=raw_output&order=created_at.desc&limit=1`,
+    )) as { raw_output: Extraction }[];
+    const extraction = rows[0]?.raw_output;
+    if (!extraction) throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    if (!isBankDocument(extraction)) {
+      throw new StoreError("This document isn't a bank or cash movement", 422);
+    }
+    const line = bankLineFromExtraction(extraction);
+    if (!line) throw new StoreError("The document has no amount to post to Banking", 422);
+
+    const accounts = await this.listBankAccounts();
+    const target =
+      accounts.find((a) => a.id === bankAccountId) ??
+      accounts.find((a) => a.currency === extraction.currency) ??
+      accounts[0];
+    if (!target) throw new StoreError("No bank account to post into", 422);
+
+    const res = await this.importStatement(target.id, "PDF_UPLOAD", [line]);
+    return {
+      documentId,
+      bankAccountId: target.id,
+      bankAccountName: target.name,
+      imported: res.imported,
+      duplicates: res.duplicates,
+    };
   }
 
   async mvrPerUsd(): Promise<number> {

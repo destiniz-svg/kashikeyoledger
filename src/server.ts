@@ -222,6 +222,7 @@ const server = createServer(async (req, res) => {
           "GET /documents  [read]",
           "POST /documents { filename, contentType, dataBase64, captureSource? }  [write]",
           "POST /documents/:id/override { taxCategory?, accountingCategory?, vendorTin?, createRule?, ruleScope? }  [write]",
+          "POST /documents/:id/post-to-bank { bankAccountId? }  [write]",
           "GET /rules  [read]",
           "DELETE /rules/:id  [write]",
           "GET /settings  [read]",
@@ -528,6 +529,14 @@ const server = createServer(async (req, res) => {
         ruleScope: body.ruleScope,
       });
       return send(res, 200, result);
+    }
+
+    const postBankMatch = /^\/documents\/([^/]+)\/post-to-bank$/.exec(path);
+    if (method === "POST" && postBankMatch) {
+      const [, docId] = postBankMatch;
+      const body = (await readJson(req)) as { bankAccountId?: string };
+      const result = await store.postDocumentToBank(docId, body.bankAccountId ?? null);
+      return send(res, 201, result);
     }
 
     if (method === "GET" && path === "/rules") {

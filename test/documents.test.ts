@@ -50,3 +50,35 @@ test("memory ingest rejects an unsupported content type", async () => {
     /Unsupported upload type/,
   );
 });
+
+test("a bank deposit slip classifies as a bank document and posts to Banking", async () => {
+  const s = new MemoryStore();
+  const doc = await s.ingestDocument({
+    filename: "bml-deposit-slip.jpg", contentType: "image/jpeg", dataBase64: pngBase64,
+  });
+  assert.equal(doc.extraction?.documentType, "BANK_DEPOSIT");
+  assert.equal(doc.extraction?.direction, "IN");
+  // Not mis-flagged as a purchase document.
+  assert.ok(!doc.extraction?.validationFlags.includes("MISSING_VENDOR_TIN"));
+
+  const before = (await s.listBankTransactions()).length;
+  const posted = await s.postDocumentToBank(doc.documentId);
+  assert.equal(posted.imported, 1);
+  assert.ok(posted.bankAccountName);
+  const after = await s.listBankTransactions();
+  assert.equal(after.length, before + 1);
+  // It lands as an unreconciled CREDIT (money in) of the deposit amount.
+  const line = after.find((t) => t.reconStatus === "UNMATCHED" && t.amount === 51000);
+  assert.ok(line, "the deposit should appear as a +51,000 unmatched bank line");
+
+  // Re-posting the same document is deduplicated.
+  const again = await s.postDocumentToBank(doc.documentId);
+  assert.equal(again.imported, 0);
+  assert.equal(again.duplicates, 1);
+});
+
+test("posting a non-bank document to Banking is rejected", async () => {
+  const s = new MemoryStore();
+  const doc = await s.ingestDocument({ filename: "invoice.png", contentType: "image/png", dataBase64: pngBase64 });
+  await assert.rejects(() => s.postDocumentToBank(doc.documentId), /isn't a bank or cash movement/);
+});

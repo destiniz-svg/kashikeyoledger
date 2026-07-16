@@ -132,6 +132,20 @@ only the wire format differs. The recorded `model` reflects whichever ran.
   `FOREIGN_CURRENCY_NO_FX`). The Maldives context (MVR/Rf, Thaana/English, the
   GGST 8% / TGST 17% / zero-rated / exempt / out-of-scope categories) lives in
   `EXTRACTION_SYSTEM_PROMPT`.
+- **Document-type-aware (all scenarios, not just invoices).** The extractor
+  classifies `documentType` — purchase/sales invoice, bill, receipt, credit note,
+  and **bank/cash** documents (`BANK_DEPOSIT`, `BANK_WITHDRAWAL`, `BANK_TRANSFER`,
+  `BANK_STATEMENT`, `PAYMENT_VOUCHER`). Bank documents carry `direction`
+  (IN/OUT), `bankName`, `bankAccountRef`, `counterparty`, `reference`, are treated
+  as OUT_OF_SCOPE cash movements (no line items), and `deriveValidationFlags`
+  skips the vendor-TIN/invoice/line-item checks for them (flagging
+  `MISSING_AMOUNT`/`UNKNOWN_DIRECTION` instead). `isBankDocument()` and
+  `bankLineFromExtraction()` are the pure helpers.
+- **Route to Banking:** **`POST /documents/:id/post-to-bank`** `{ bankAccountId? }`
+  (write-guarded) turns a bank document into a reconcilable `bank_transaction`
+  (IN→CREDIT, OUT→DEBIT) via `importStatement` (deduped), picking a bank account
+  by currency when none is given. The AI Inbox shows bank docs with a money-in/out
+  chip and a **Post to Banking** action.
 - Storage bucket: [`supabase/phase2_ai_ingestion.sql`](supabase/phase2_ai_ingestion.sql)
   (private, service-role only). The **in-memory** backend returns a canned
   extraction so the flow works with no key/DB. Frontend: the **AI Inbox** screen

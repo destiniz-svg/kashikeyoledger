@@ -21,6 +21,15 @@ export interface OverrideResult {
   rule: CategorizationRule | null;
 }
 
+/** Outcome of posting a bank/cash document into the Banking module. */
+export interface PostToBankResult {
+  documentId: string;
+  bankAccountId: string;
+  bankAccountName: string;
+  imported: number;
+  duplicates: number;
+}
+
 /** A chart-of-accounts entry. `accountType` is one of the DB-allowed types. */
 export interface AccountRow {
   id?: string;
@@ -592,6 +601,14 @@ export interface LedgerStore {
   listRules(): Promise<CategorizationRule[]>;
   /** Deactivate a categorization rule. */
   deleteRule(id: string): Promise<{ id: string }>;
+
+  /**
+   * Post a bank/cash document (deposit/withdrawal slip, transfer, voucher) into
+   * the Banking module as a reconcilable bank transaction. Picks a bank account
+   * by currency when `bankAccountId` is omitted. Throws if the document isn't a
+   * bankable movement.
+   */
+  postDocumentToBank(documentId: string, bankAccountId?: string | null): Promise<PostToBankResult>;
 
   /** MVR per 1 USD — the reference rate for the dual-currency view (Phase 4). */
   mvrPerUsd(): Promise<number>;
