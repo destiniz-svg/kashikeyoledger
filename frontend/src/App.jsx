@@ -1,10 +1,11 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
-import { getDashboard } from "./api.js";
 import { getSession, signOut } from "./auth.js";
 import { T, sans, mono } from "./theme.js";
 import { Sidebar, BottomNav, MobileHeader, Topbar } from "./nav.jsx";
 import { LoginModal } from "./LoginModal.jsx";
 import { Landing } from "./Landing.jsx";
+import { CommandPalette } from "./CommandPalette.jsx";
+import { useAppSignals } from "./signals.js";
 
 // Each screen is its own code-split chunk, loaded on first navigation. This
 // keeps heavy per-screen deps (recharts on Dashboard, pdf-lib on Tax filing)
@@ -89,7 +90,7 @@ export default function App() {
   const [active, setActive] = useState("dashboard");
   const [session, setSession] = useState(() => getSession());
   const [loginOpen, setLoginOpen] = useState(false);
-  const [counts, setCounts] = useState({});
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // Returning signed-in users skip the landing page and go straight to the app.
   const [view, setView] = useState(() => (getSession() ? "app" : "landing"));
   const title = TITLES[active] || "Kashikeyo";
@@ -100,18 +101,23 @@ export default function App() {
     onSignIn: () => setLoginOpen(true),
     onSignOut: () => { signOut(); setSession(null); },
   };
+  const nav = (id) => { setPaletteOpen(false); setActive(id); };
 
-  // Live nav badges: pending approvals + bill count. Refetch on login and nav
-  // so the counts reflect actions taken elsewhere in the app. Only runs once
-  // the app view is active (skipped on the landing page).
+  // Live signals: nav badges + the notifications panel, from real API data.
+  const { counts, notifications, unread, markRead } = useAppSignals(active, session, view === "app");
+  const notif = { notifications, unread, markRead };
+
+  // ⌘K / Ctrl-K opens the command palette from anywhere in the app.
   useEffect(() => {
     if (view !== "app") return;
-    let alive = true;
-    getDashboard()
-      .then((d) => { if (alive && d) setCounts({ approval: d.pendingApprovals, bills: d.billCount }); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [session, active, view]);
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault(); setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view]);
 
   if (view === "landing") {
     return (
@@ -126,37 +132,37 @@ export default function App() {
     <div style={{ fontFamily: sans, color: T.text, minHeight: "100vh", display: "flex",
       background: T.paper }}>
       <style>{`
-        @media (prefers-reduced-motion: reduce){ *{transition:none!important;animation:none!important} }
         button:focus-visible{ outline:2px solid ${T.gold}; outline-offset:2px; }
-        ::-webkit-scrollbar{height:8px;width:8px}
-        ::-webkit-scrollbar-thumb{background:${T.line};border-radius:8px}
         input::placeholder{color:${T.faint}}
         @keyframes kpulse{0%,100%{opacity:.35}50%{opacity:1}}
       `}</style>
-      <Sidebar active={active} onNav={setActive} counts={counts} />
+      <Sidebar active={active} onNav={nav} counts={counts} onOpenPalette={() => setPaletteOpen(true)} auth={auth} />
       <main className="flex-1 min-w-0 flex flex-col">
-        <MobileHeader title={title} />
-        <Topbar title={title} auth={auth} />
+        <MobileHeader title={title} onOpenPalette={() => setPaletteOpen(true)} onNav={nav} notif={notif} />
+        <Topbar title={title} auth={auth} onOpenPalette={() => setPaletteOpen(true)} onNav={nav} notif={notif} />
         <div className="flex-1" style={{ paddingBottom: 64 }} key={session ? "auth" : "anon"}>
           <ScreenBoundary screen={active}>
           <Suspense fallback={<ScreenFallback />}>
-            {active === "dashboard" && <Dashboard onNav={setActive} />}
+            <div key={active} className="k-in-fade">
+            {active === "dashboard" && <Dashboard onNav={nav} />}
             {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
-            {active === "bills" && <Bills />}
+            {active === "bills" && <Bills onNav={nav} />}
             {active === "vendors" && <Vendors />}
             {active === "filing" && <TaxFiling />}
-            {active === "reports" && <Reports />}
+            {active === "reports" && <Reports onNav={nav} />}
             {active === "inventory" && <Inventory />}
             {active === "banking" && <Banking session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "inbox" && <AIInbox session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "settings" && <Settings session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "txns" && <Transactions />}
             {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "inbox", "settings", "txns"].includes(active) && <Placeholder id={active} />}
+            </div>
           </Suspense>
           </ScreenBoundary>
         </div>
       </main>
-      <BottomNav active={active} onNav={setActive} counts={counts} />
+      <BottomNav active={active} onNav={nav} counts={counts} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNav={nav} auth={auth} />
       {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />}
     </div>
   );

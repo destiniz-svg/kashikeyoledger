@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { ChevronDown, TrendingUp, TrendingDown, ArrowUpRight, ArrowRight,
   ShieldCheck, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { getDashboard, getCompliance, API_BASE } from "./api.js";
+import { getDashboard, getCompliance, getInventory, API_BASE } from "./api.js";
 import { T, mono, num, fmt, fmt0, dec2 } from "./theme.js";
 import { TREND, BY_CATEGORY, BY_VENDOR, BY_TAX, CAT_COLORS, TAX_COLORS } from "./data.js";
 import { Eyebrow, BreakdownList } from "./ui.jsx";
@@ -164,16 +164,6 @@ function StatCard({ label, value, cur, sub, action, onAction, accent }) {
 }
 
 
-function DropPill({ children }) {
-  return (
-    <button className="flex items-center gap-1.5 rounded-lg px-3 py-2 focus:outline-none"
-      style={{ border: `1px solid ${T.line}`, background: T.surface, fontSize: 12.5,
-        color: T.text, fontWeight: 500 }}>
-      {children} <ChevronDown size={14} color={T.faint} />
-    </button>
-  );
-}
-
 /* ---- Live ledger strip — real data from the API, with graceful fallback --- */
 function LiveLedgerStrip({ state }) {
   if (state.status === "loading") {
@@ -224,9 +214,13 @@ function LiveLedgerStrip({ state }) {
   );
 }
 
+const PERIODS = [["all", "All"], ["6m", "6M"], ["3m", "3M"]];
+
 export function Dashboard({ onNav }) {
   const [state, setState] = useState({ status: "loading", data: null });
   const [compliance, setCompliance] = useState(null);
+  const [invValue, setInvValue] = useState(null);
+  const [period, setPeriod] = useState("all");
   useEffect(() => {
     let alive = true;
     getDashboard()
@@ -234,6 +228,9 @@ export function Dashboard({ onNav }) {
       .catch(() => alive && setState({ status: "offline", data: null }));
     getCompliance()
       .then((c) => alive && c?.checks && setCompliance(c))
+      .catch(() => {});
+    getInventory()
+      .then((r) => alive && r && setInvValue(r.totalValue))
       .catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -248,7 +245,8 @@ export function Dashboard({ onNav }) {
   const taxRows = live && d.spendByTax?.length
     ? d.spendByTax.map((r) => ({ ...r, color: TAX_COLORS[r.name] || T.teal }))
     : BY_TAX;
-  const trendData = live && d.spendTrend?.length ? d.spendTrend : TREND;
+  const fullTrend = live && d.spendTrend?.length ? d.spendTrend : TREND;
+  const trendData = period === "all" ? fullTrend : fullTrend.slice(-(period === "6m" ? 6 : 3));
   const totalSpend = live ? fmt0(d.totalSpend) : "Rf 213,790";
   const billCount = live ? d.billCount : 26;
   const largest = live ? d.largestBill : { vendor: "Altura Pvt Ltd", amt: 98280, date: "05 Jul" };
@@ -262,15 +260,16 @@ export function Dashboard({ onNav }) {
       <LiveLedgerStrip state={state} />
       <DualCurrencyHeader c={comp} />
       {/* stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <StatCard label="Accounts payable" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
-          sub={`${billCount} bills`} action="Review" onAction={() => onNav("bills")} />
-        <StatCard label="Awaiting approval" value={live ? String(d.pendingApprovals) : "3"}
-          sub="draft or AI-verified" accent={T.teal} />
-        <StatCard label="Claimable input tax" value={live ? dec2(d.claimableInputTax) : "8,107.00"} cur="MVR"
-          sub="toward MIRA 205" accent={T.claim} />
-        <StatCard label="Inventory value" value="312,400" cur="MVR"
-          sub="weighted average cost" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 k-stagger">
+        <div style={{ "--k-i": 0 }}><StatCard label="Accounts payable" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
+          sub={`${billCount} bills`} action="Review" onAction={() => onNav("bills")} /></div>
+        <div style={{ "--k-i": 1 }}><StatCard label="Awaiting approval" value={live ? String(d.pendingApprovals) : "3"}
+          sub="draft or AI-verified" accent={T.teal} action="Open" onAction={() => onNav("approval")} /></div>
+        <div style={{ "--k-i": 2 }}><StatCard label="Claimable input tax" value={live ? dec2(d.claimableInputTax) : "8,107.00"} cur="MVR"
+          sub="toward MIRA 205" accent={T.claim} /></div>
+        <div style={{ "--k-i": 3 }}><StatCard label="Inventory value"
+          value={invValue != null ? dec2(invValue) : (live ? "—" : "312,400")} cur="MVR"
+          sub="weighted average cost" action="View" onAction={() => onNav("inventory")} /></div>
       </div>
 
       {/* MIRA compliance widget */}
@@ -281,9 +280,17 @@ export function Dashboard({ onNav }) {
       {/* overview band */}
       <div className="flex items-center justify-between mt-7 mb-4 flex-wrap gap-3">
         <div style={{ fontSize: 17, fontWeight: 680, color: T.text }}>Overview</div>
-        <div className="flex items-center gap-2">
-          <DropPill>All vendors</DropPill>
-          <DropPill>This month</DropPill>
+        <div className="flex items-center gap-1" style={{ background: T.surface, border: `1px solid ${T.line}`,
+          borderRadius: 10, padding: 3 }}>
+          {PERIODS.map(([id, label]) => {
+            const on = period === id;
+            return (
+              <button key={id} onClick={() => setPeriod(id)} className="focus:outline-none k-press"
+                style={{ fontFamily: mono, fontSize: 11.5, fontWeight: 600, padding: "5px 12px", borderRadius: 7,
+                  cursor: "pointer", transition: "all .18s var(--k-ease)",
+                  background: on ? T.ink : "transparent", color: on ? "#fff" : T.muted }}>{label}</button>
+            );
+          })}
         </div>
       </div>
 

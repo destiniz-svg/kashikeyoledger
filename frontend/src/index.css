@@ -1,3 +1,76 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ===========================================================================
+   Motion + design system — a small, dependency-free animation layer used across
+   the app shell, screens and landing page. Everything degrades gracefully when
+   the user prefers reduced motion.
+   =========================================================================== */
+
+:root {
+  --k-ease: cubic-bezier(0.22, 1, 0.36, 1);      /* soft, confident ease-out */
+  --k-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --k-shadow-lift: 0 18px 40px -24px rgba(11, 42, 46, 0.45);
+}
+
+@keyframes k-fade-up   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes k-fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes k-scale-in  { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes k-slide-left{ from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes k-pop       { 0% { transform: scale(0.8); opacity: 0; } 60% { transform: scale(1.06); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes k-pulse     { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@keyframes k-spin      { to { transform: rotate(360deg); } }
+@keyframes k-shimmer   { 100% { transform: translateX(100%); } }
+@keyframes k-ring      { 0%, 100% { transform: rotate(0); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-11deg); } 45% { transform: rotate(8deg); } 60% { transform: rotate(-6deg); } 75% { transform: rotate(3deg); } }
+@keyframes k-sheen     { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Entrance helpers. `k-in` animates on mount; `k-reveal` is toggled by the
+   IntersectionObserver hook (starts hidden, adds `.is-in` when scrolled into view). */
+.k-in        { animation: k-fade-up 0.5s var(--k-ease) both; }
+.k-in-fade   { animation: k-fade-in 0.5s var(--k-ease) both; }
+.k-in-scale  { animation: k-scale-in 0.45s var(--k-ease) both; }
+.k-in-left   { animation: k-slide-left 0.5s var(--k-ease) both; }
+.k-pop       { animation: k-pop 0.32s var(--k-ease) both; }
+
+.k-reveal            { opacity: 0; transform: translateY(18px); transition: opacity 0.6s var(--k-ease), transform 0.6s var(--k-ease); }
+.k-reveal.is-in      { opacity: 1; transform: none; }
+
+/* Stagger children: set --k-stagger index inline (style={{"--k-i":n}}). */
+.k-stagger > *       { animation: k-fade-up 0.5s var(--k-ease) both; animation-delay: calc(var(--k-i, 0) * 60ms); }
+
+/* Hover lift for cards/buttons that opt in. */
+.k-lift { transition: transform 0.2s var(--k-ease), box-shadow 0.2s var(--k-ease); }
+.k-lift:hover { transform: translateY(-2px); box-shadow: var(--k-shadow-lift); }
+
+.k-press { transition: transform 0.12s var(--k-ease); }
+.k-press:active { transform: scale(0.97); }
+
+/* Skeleton shimmer for loading states. */
+.k-skeleton { position: relative; overflow: hidden; background: #EEF1EF; }
+.k-skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  animation: k-shimmer 1.4s infinite;
+}
+
+.k-spin { animation: k-spin 0.8s linear infinite; }
+.k-bell-ring { animation: k-ring 0.9s var(--k-ease) both; transform-origin: top center; }
+
+/* A moving sheen for premium gradient text/badges. */
+.k-sheen {
+  background-size: 200% auto;
+  animation: k-sheen 3.5s linear infinite;
+}
+
+/* Global niceties */
+* { -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; }
+::-webkit-scrollbar { height: 9px; width: 9px; }
+::-webkit-scrollbar-thumb { background: #DCE1DD; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #C8CFC9; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+  .k-reveal { opacity: 1; transform: none; }
+}
