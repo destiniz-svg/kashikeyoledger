@@ -5,6 +5,7 @@
 // does not publish a fillable 206 we bundle here, so this draws a clean,
 // print-ready TGST return worksheet from scratch with the period's figures.
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { getDeclaration, dataUrlToBytes, isPng } from "./declaration.js";
 
 const INK = rgb(0.059, 0.129, 0.141);
 const TEAL = rgb(0.165, 0.435, 0.467);
@@ -130,6 +131,7 @@ export async function exportFilingPdf206(f, taxpayer) {
   y -= 26;
 
   // Declaration + signature
+  const decl = getDeclaration();
   page.drawLine({ start: { x: M, y }, end: { x: right, y }, thickness: 0.6, color: LINE });
   y -= 18;
   const declLines = [
@@ -138,10 +140,24 @@ export async function exportFilingPdf206(f, taxpayer) {
   ];
   for (const l of declLines) { text(l, M, y, 9, font, MUTED); y -= 14; }
   y -= 26;
+  // The signature image (if provided) and the signing date sit above their lines.
+  if (decl.signature) {
+    try {
+      const bytes = dataUrlToBytes(decl.signature);
+      const img = isPng(decl.signature) ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
+      const s = Math.min(190 / img.width, 34 / img.height);
+      page.drawImage(img, { x: M, y: y + 4, width: img.width * s, height: img.height * s });
+    } catch { /* skip an unreadable image */ }
+  }
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (decl.name || decl.designation) text(ddmonyyyy(todayIso), colR, y + 6, 10, font, INK);
   page.drawLine({ start: { x: M, y }, end: { x: M + 200, y }, thickness: 0.8, color: INK });
   page.drawLine({ start: { x: colR, y }, end: { x: colR + 160, y }, thickness: 0.8, color: INK });
   text("Authorised signature", M, y - 12, 8, font, FAINT);
   text("Date", colR, y - 12, 8, font, FAINT);
+  if (decl.name) text(decl.name, M, y - 26, 10, bold, INK);
+  if (decl.designation) text(decl.designation, M, y - 38, 8.5, font, MUTED);
 
   // Footer
   text("Prepared with Kashikeyo Ledger", M, 40, 8, font, FAINT);

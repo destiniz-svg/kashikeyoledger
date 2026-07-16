@@ -6,11 +6,16 @@
 //   DateTimeField1/2 = period From / To (DDMMYYYY)
 //   NumericField1..13 = Boxes 1..13 (values, rounded to the nearest Rufiyaa)
 import { PDFDocument, PDFName, PDFBool } from "pdf-lib";
+import { getDeclaration, dataUrlToBytes, isPng } from "./declaration.js";
 
 const PREFIX = "topmostSubform[0].Page1[0].";
 const ddmmyyyy = (iso) => {
   const [y, m, d] = (iso || "").split("-");
   return y ? `${d}${m}${y}` : "";
+};
+const todayDDMMYYYY = () => {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, "0")}${String(d.getMonth() + 1).padStart(2, "0")}${d.getFullYear()}`;
 };
 
 function download(bytes, name) {
@@ -54,6 +59,29 @@ export async function exportFilingPdf(f, taxpayer) {
   set("NumericField11[0]", r0(Math.max(0, liability)));
   set("NumericField12[0]", "0");
   set("NumericField13[0]", "0");
+
+  // Declaration block: split the declarant name into first / other names to
+  // match the form, and fill designation, contact and the signing date.
+  const decl = getDeclaration();
+  const name = (decl.name || "").trim();
+  const gap = name.indexOf(" ");
+  set("TextField16[0]", decl.title || "");
+  set("TextField17[0]", gap === -1 ? name : name.slice(0, gap)); // First name
+  set("TextField18[0]", gap === -1 ? "" : name.slice(gap + 1)); // Other names
+  set("TextField19[0]", decl.contact || "");
+  set("TextField20[0]", decl.designation || "");
+  if (name || decl.designation) set("DateTimeField3[0]", todayDDMMYYYY());
+
+  // Stamp the signature image into the "Signature & Seal" area (no form field).
+  if (decl.signature) {
+    try {
+      const bytes = dataUrlToBytes(decl.signature);
+      const img = isPng(decl.signature) ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+      const maxW = 125, maxH = 30;
+      const s = Math.min(maxW / img.width, maxH / img.height);
+      doc.getPage(0).drawImage(img, { x: 430, y: 90, width: img.width * s, height: img.height * s });
+    } catch { /* skip an unreadable image */ }
+  }
 
   // This is an XFA-hybrid form. Drop the XFA and ask viewers to regenerate
   // appearances so our AcroForm values are what shows.
