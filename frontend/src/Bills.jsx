@@ -17,6 +17,12 @@ const AGE = {
 };
 const ageOf = (k) => AGE[k] || AGE.current;
 
+// Escape a CSV cell (quote when it contains a comma, quote or newline).
+const csvCell = (v) => {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 export function Bills() {
   const w = useW(); const wide = w >= 768;
   const [bills, setBills] = useState(BILLS);
@@ -28,6 +34,19 @@ export function Bills() {
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  // Export the bills as a CSV of input-tax lines, ready to reconcile against MIRA 205.
+  function exportCsv() {
+    const cols = ["Vendor", "TIN", "Invoice", "Date", "Due", "Currency", "Subtotal", "GST", "Total", "Category", "TaxCategory", "Status"];
+    const rows = bills.map((b) => [b.vendor, b.tin, b.invoice, b.date, b.due, b.cur,
+      b.subtotal, b.gst, b.total, b.cat, b.taxCat, b.status]);
+    const csv = [cols, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `kashikeyo-bills-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`,
@@ -48,9 +67,13 @@ export function Bills() {
             <div style={{ fontSize: 15, fontWeight: 620, color: T.text, marginTop: 2 }}>
               All bills &amp; expenses</div>
           </div>
-          <button className="flex items-center gap-2 rounded-lg px-3 sm:px-3.5 focus:outline-none shrink-0"
-            style={{ border: `1px solid ${T.line}`, fontSize: 12.5, color: T.muted, minHeight: 40 }}>
-            <Download size={14} /> <span className="hidden sm:inline">Export for MIRA 205</span>
+          <button onClick={exportCsv}
+            className="flex items-center gap-2 rounded-lg px-3 sm:px-3.5 focus:outline-none shrink-0 k-press"
+            style={{ border: `1px solid ${T.line}`, fontSize: 12.5, color: T.muted, minHeight: 40,
+              transition: "border-color .18s, color .18s" }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.teal; e.currentTarget.style.color = T.teal; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.line; e.currentTarget.style.color = T.muted; }}>
+            <Download size={14} /> <span className="hidden sm:inline">Export CSV</span>
             <span className="sm:hidden">Export</span>
           </button>
         </div>

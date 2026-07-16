@@ -29,7 +29,7 @@ const REPORT_DEMO = {
 };
 
 
-export function Reports() {
+export function Reports({ onNav }) {
   const w = useW(); const wide = w >= 768;
   const [data, setData] = useState(REPORT_DEMO);
   const [live, setLive] = useState(false);
@@ -99,7 +99,7 @@ export function Reports() {
 
         {/* Spend by category */}
         <div className="rounded-2xl p-5 sm:p-6" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-          <BreakdownList title="Spend by category" rows={catRows} variant="cat" onMore={() => {}} />
+          <BreakdownList title="Spend by category" rows={catRows} variant="cat" onMore={() => onNav?.("bills")} />
         </div>
       </div>
     </div>
