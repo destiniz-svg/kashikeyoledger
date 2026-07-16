@@ -159,6 +159,23 @@ learns from it (`src/rules.ts`, pure/testable):
   Inbox** override editor (tax + accounting category, "remember this vendor")
   and a **Learned rules** panel.
 
+## MIRA-ready dashboard (Phase 4)
+
+A readiness score + dual-currency view, computed from existing data (no new
+tables). `src/compliance.ts` is pure/testable; the server assembles the inputs.
+
+- **`GET /compliance`** returns a 0–100 `score` and `checks[]` (each `ok`/`warn`/
+  `risk` with a `detail`): vendor-TIN completeness (+ `unclaimableInputTax` — GST
+  that can't be claimed without a supplier TIN), AI-extraction review backlog,
+  bank reconciliation, ledger balance, and the soonest open GST filing's due
+  date. Score = 100 − (20 per risk, 8 per warn).
+- **Dual currency**: every figure comes as `{ mvr, usd }` using `store.mvrPerUsd()`
+  (latest `exchange_rates` USD→MVR, else the MMA peg **15.42**, seeded by
+  [`supabase/phase4_dashboard.sql`](supabase/phase4_dashboard.sql)).
+- Frontend `Dashboard.jsx`: a dark **dual-currency header** (MVR with USD
+  underneath, FX chip) and a **MIRA readiness** widget (score ring + drill-through
+  checks → Bills / AI Inbox / Banking / Tax filing / Reports).
+
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`

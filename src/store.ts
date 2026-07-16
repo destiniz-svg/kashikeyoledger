@@ -592,6 +592,9 @@ export interface LedgerStore {
   listRules(): Promise<CategorizationRule[]>;
   /** Deactivate a categorization rule. */
   deleteRule(id: string): Promise<{ id: string }>;
+
+  /** MVR per 1 USD — the reference rate for the dual-currency view (Phase 4). */
+  mvrPerUsd(): Promise<number>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);

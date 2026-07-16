@@ -11,6 +11,7 @@ import { extname, join, normalize, sep } from "node:path";
 import { authorizeRead, authorizeWrite, extractApiKey } from "./auth.ts";
 import { createStore } from "./createStore.ts";
 import { StoreError, formatBillDate, type EntryInput, type SaleInput } from "./store.ts";
+import { buildCompliance } from "./compliance.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
@@ -216,6 +217,7 @@ const server = createServer(async (req, res) => {
           "GET /banking  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
+          "GET /compliance  [read]",
           "GET /transactions  [read]",
           "GET /documents  [read]",
           "POST /documents { filename, contentType, dataBase64, captureSource? }  [write]",
@@ -589,6 +591,42 @@ const server = createServer(async (req, res) => {
         },
         members,
       });
+    }
+
+    if (method === "GET" && path === "/compliance") {
+      if (!(await readGuard(req, res))) return;
+      const [tb, bills, vendors, documents, ggst, tgst, bankTxns, mvrPerUsd, oob] =
+        await Promise.all([
+          store.trialBalance(),
+          store.listBills(),
+          store.listVendors(),
+          store.listDocuments(),
+          store.listGstFilings(),
+          store.listTgstFilings(),
+          store.listBankTransactions(),
+          store.mvrPerUsd(),
+          store.outOfBalanceBy(),
+        ]);
+      const sumBy = (types: string[]) =>
+        tb.filter((r) => types.includes(r.accountType)).reduce((s, r) => s + r.balance, 0);
+      const report = buildCompliance({
+        bills,
+        vendors,
+        documents,
+        ggstFilings: ggst,
+        tgstFilings: tgst,
+        unreconciledBankLines: bankTxns.filter((t) =>
+          ["UNMATCHED", "SUGGESTED"].includes(t.reconStatus)).length,
+        outOfBalanceBy: oob,
+        cashAndBank: sumBy(["ASSET", "BANK"]),
+        expenses: sumBy(["EXPENSE", "COGS"]),
+        accountsPayable: -sumBy(["LIABILITY"]),
+        claimableInputTax: round2(
+          bills.filter((b) => b.taxCat !== "EXEMPT").reduce((s, b) => s + b.gst, 0),
+        ),
+        mvrPerUsd,
+      });
+      return send(res, 200, report);
     }
 
     if (method === "GET" && path === "/tax-filing") {

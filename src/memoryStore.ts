@@ -574,6 +574,10 @@ export class MemoryStore implements LedgerStore {
     return { id };
   }
 
+  async mvrPerUsd(): Promise<number> {
+    return 15.42; // MMA reference peg
+  }
+
   async listVendors(): Promise<VendorRow[]> {
     const map = new Map<string, { tin: string; totalSpend: number; billCount: number; lastBillDate: string }>();
     for (const b of this.#bills) {

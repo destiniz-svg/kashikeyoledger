@@ -1,10 +1,138 @@
 import React, { useState, useEffect } from "react";
-import { ChevronDown, TrendingUp, TrendingDown, ArrowUpRight, ArrowRight } from "lucide-react";
+import { ChevronDown, TrendingUp, TrendingDown, ArrowUpRight, ArrowRight,
+  ShieldCheck, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { getDashboard, API_BASE } from "./api.js";
+import { getDashboard, getCompliance, API_BASE } from "./api.js";
 import { T, mono, num, fmt, fmt0, dec2 } from "./theme.js";
 import { TREND, BY_CATEGORY, BY_VENDOR, BY_TAX, CAT_COLORS, TAX_COLORS } from "./data.js";
 import { Eyebrow, BreakdownList } from "./ui.jsx";
+
+// USD from MVR, for the dual-currency labels.
+const usd = (n) => `$ ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const SAMPLE_COMPLIANCE = {
+  score: 72,
+  fx: { base: "MVR", quote: "USD", mvrPerUsd: 15.42 },
+  money: {
+    cashAndBank: { mvr: 246048.63, usd: 15957.76 },
+    expenses: { mvr: 118420, usd: 7679.64 },
+    accountsPayable: { mvr: 45230, usd: 2933.2 },
+    claimableInputTax: { mvr: 8107, usd: 525.75 },
+  },
+  missingTin: { bills: 4, vendors: 4, unclaimableInputTax: 1166.07 },
+  documentsNeedingReview: 1,
+  unreconciledBankLines: 7,
+  outOfBalanceBy: 0,
+  filing: { form: "MIRA_205_GGST", mira: "MIRA 205", periodEnd: "2026-06-30", dueDate: "2026-07-28", status: "DUE_SOON", daysToDue: 12 },
+  checks: [
+    { id: "vendor_tin", label: "Vendor TIN completeness", status: "risk", detail: "4 bills without a supplier TIN — input GST can't be claimed.", count: 4, amount: 1166.07 },
+    { id: "doc_review", label: "Document review", status: "warn", detail: "1 extracted document flagged for review.", count: 1 },
+    { id: "bank_recon", label: "Bank reconciliation", status: "warn", detail: "7 bank lines still to reconcile.", count: 7 },
+    { id: "ledger_balance", label: "Ledger balance", status: "ok", detail: "Debits equal credits." },
+    { id: "filing_due", label: "GST filing", status: "ok", detail: "Next return (MIRA 205) due 2026-07-28." },
+  ],
+};
+
+const STATUS_META = {
+  ok: { color: T.claim, soft: T.claimSoft, Icon: CheckCircle2 },
+  warn: { color: T.warn, soft: T.warnSoft, Icon: AlertTriangle },
+  risk: { color: T.exempt, soft: T.exemptSoft, Icon: XCircle },
+};
+const CHECK_NAV = { vendor_tin: "bills", doc_review: "inbox", bank_recon: "banking", filing_due: "filing", ledger_balance: "reports" };
+
+// Which base-currency figures to show in the dual-currency header.
+const DUAL_FIELDS = [
+  ["Cash & bank", "cashAndBank"],
+  ["Expenses", "expenses"],
+  ["Accounts payable", "accountsPayable"],
+  ["Claimable input tax", "claimableInputTax"],
+];
+
+function DualCurrencyHeader({ c }) {
+  return (
+    <div className="rounded-2xl p-4 sm:p-5 mb-4" style={{ background: T.ink }}>
+      <div className="flex items-center gap-2 mb-3.5 flex-wrap">
+        <Eyebrow style={{ color: "rgba(255,255,255,0.66)" }}>Position · base MVR</Eyebrow>
+        <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+          color: T.gold, background: "rgba(184,137,43,0.16)", borderRadius: 999, padding: "2px 8px" }}>
+          USD @ {c.fx.mvrPerUsd.toFixed(2)}</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        {DUAL_FIELDS.map(([label, key]) => (
+          <div key={key} className="min-w-0">
+            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase",
+              color: "rgba(255,255,255,0.6)" }}>{label}</div>
+            <div style={{ ...num, fontSize: 18, fontWeight: 680, color: "#fff", marginTop: 4,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fmt(c.money[key].mvr)}</div>
+            <div style={{ ...num, fontSize: 11, color: "rgba(255,255,255,0.62)", marginTop: 1 }}>
+              {usd(c.money[key].usd)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScoreRing({ score }) {
+  const color = score >= 85 ? T.claim : score >= 60 ? T.warn : T.exempt;
+  const r = 26, circ = 2 * Math.PI * r;
+  return (
+    <div style={{ position: "relative", width: 68, height: 68, flexShrink: 0 }}>
+      <svg width="68" height="68" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="34" cy="34" r={r} fill="none" stroke={T.line2} strokeWidth="6" />
+        <circle cx="34" cy="34" r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - score / 100)} />
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+        <span style={{ ...num, fontSize: 18, fontWeight: 700, color }}>{score}</span>
+      </div>
+    </div>
+  );
+}
+
+function ComplianceWidget({ c, onNav }) {
+  const risks = c.checks.filter((x) => x.status !== "ok").length;
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+      <div className="flex items-center gap-3 p-4 sm:p-5" style={{ borderBottom: `1px solid ${T.line}` }}>
+        <ScoreRing score={c.score} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <ShieldCheck size={15} color={T.teal} />
+            <div style={{ fontSize: 14.5, fontWeight: 680, color: T.text }}>MIRA readiness</div>
+          </div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
+            {risks === 0 ? "All checks clear — ready to file." : `${risks} item${risks === 1 ? "" : "s"} need attention before filing.`}</div>
+          {c.missingTin.unclaimableInputTax > 0 && (
+            <div style={{ ...num, fontSize: 11.5, color: T.exempt, fontWeight: 600, marginTop: 3 }}>
+              {fmt(c.missingTin.unclaimableInputTax)} input tax at risk (missing TIN)</div>
+          )}
+        </div>
+      </div>
+      <div>
+        {c.checks.map((x, i) => {
+          const m = STATUS_META[x.status] || STATUS_META.warn;
+          const nav = CHECK_NAV[x.id];
+          return (
+            <button key={x.id} onClick={() => nav && onNav(nav)} disabled={!nav}
+              className="w-full flex items-start gap-3 px-4 sm:px-5 py-3 text-left focus:outline-none"
+              style={{ borderTop: i ? `1px solid ${T.line2}` : "none", cursor: nav ? "pointer" : "default",
+                background: "transparent" }}>
+              <div style={{ width: 26, height: 26, borderRadius: 8, background: m.soft, flexShrink: 0,
+                display: "grid", placeItems: "center", marginTop: 1 }}>
+                <m.Icon size={15} color={m.color} /></div>
+              <div className="flex-1 min-w-0">
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>{x.label}</div>
+                <div style={{ fontSize: 11.5, color: T.muted, marginTop: 1 }}>{x.detail}</div>
+              </div>
+              {nav && <ArrowRight size={14} color={T.faint} style={{ marginTop: 4, flexShrink: 0 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /* ---------------------------------------------------------------------------
    Dashboard — cloned layout from reference 44
@@ -98,13 +226,18 @@ function LiveLedgerStrip({ state }) {
 
 export function Dashboard({ onNav }) {
   const [state, setState] = useState({ status: "loading", data: null });
+  const [compliance, setCompliance] = useState(null);
   useEffect(() => {
     let alive = true;
     getDashboard()
       .then((d) => alive && setState({ status: "live", data: d }))
       .catch(() => alive && setState({ status: "offline", data: null }));
+    getCompliance()
+      .then((c) => alive && c?.checks && setCompliance(c))
+      .catch(() => {});
     return () => { alive = false; };
   }, []);
+  const comp = compliance || SAMPLE_COMPLIANCE;
   const d = state.data;
   const live = state.status === "live" && d;
 
@@ -127,6 +260,7 @@ export function Dashboard({ onNav }) {
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
       <LiveLedgerStrip state={state} />
+      <DualCurrencyHeader c={comp} />
       {/* stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard label="Accounts payable" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
@@ -137,6 +271,11 @@ export function Dashboard({ onNav }) {
           sub="toward MIRA 205" accent={T.claim} />
         <StatCard label="Inventory value" value="312,400" cur="MVR"
           sub="weighted average cost" />
+      </div>
+
+      {/* MIRA compliance widget */}
+      <div className="mt-4">
+        <ComplianceWidget c={comp} onNav={onNav} />
       </div>
 
       {/* overview band */}

@@ -1024,6 +1024,19 @@ export class SupabaseStore implements LedgerStore {
     return { documentId, extraction, rule };
   }
 
+  async mvrPerUsd(): Promise<number> {
+    try {
+      const rows = (await this.#request(
+        `/rest/v1/exchange_rates?from_currency=eq.USD&to_currency=eq.MVR` +
+          `&select=rate&order=rate_date.desc&limit=1`,
+      )) as { rate: string | number }[];
+      const r = Number(rows[0]?.rate);
+      return Number.isFinite(r) && r > 0 ? r : 15.42;
+    } catch {
+      return 15.42; // MMA reference peg fallback
+    }
+  }
+
   async verifyMember(token: string): Promise<boolean> {
     const cachedExp = this.#authCache.get(token);
     if (cachedExp && cachedExp > Date.now()) return true;

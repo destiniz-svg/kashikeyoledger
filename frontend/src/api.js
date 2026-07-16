@@ -50,6 +50,7 @@ export const getBills = () => get("/bills");
 export const getVendors = () => get("/vendors");
 export const getTaxFiling = () => get("/tax-filing");
 export const getReports = () => get("/reports");
+export const getCompliance = () => get("/compliance");
 export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
 export const getSettings = () => get("/settings");
