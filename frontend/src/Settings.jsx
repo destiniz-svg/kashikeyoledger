@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { Landmark, Check, ShieldCheck, Settings as SettingsIcon, Users, Pencil } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Landmark, Check, ShieldCheck, Settings as SettingsIcon, Users, Pencil, PenLine, Upload } from "lucide-react";
 import { getSettings, updateSettings, API_BASE } from "./api.js";
+import { getDeclaration, saveDeclaration } from "./declaration.js";
 import { T, mono, sans, dec2, MON_LONG, useW } from "./theme.js";
 import { Eyebrow } from "./ui.jsx";
 
@@ -69,6 +70,63 @@ const Toggle = ({ on: isOn, onChange }) => (
 const SECTOR_OPTS = [["GENERAL", "General"], ["TOURISM", "Tourism"]];
 const FREQ_OPTS = [["MONTHLY", "Monthly"], ["QUARTERLY", "Quarterly"]];
 const MONTH_OPTS = MON_LONG.map((m, i) => [String(i + 1), m]);
+
+// The declarant name, designation, contact and signature that get stamped onto
+// every MIRA 205 / 206 PDF export. Persisted on the device (localStorage).
+function DeclarationCard() {
+  const [decl, setDecl] = useState(() => getDeclaration());
+  const [err, setErr] = useState(null);
+  const fileRef = useRef(null);
+  const update = (patch) => { const d = { ...decl, ...patch }; setDecl(d); saveDeclaration(d); };
+  function onFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) { setErr("Use a PNG or JPG image."); return; }
+    if (file.size > 400 * 1024) { setErr("Image too large — keep it under 400 KB."); return; }
+    setErr(null);
+    const r = new FileReader();
+    r.onload = () => update({ signature: r.result });
+    r.readAsDataURL(file);
+  }
+  const inp = { ...editInput, textAlign: "right" };
+  return (
+    <SettingsCard icon={PenLine} title="MIRA filing declaration">
+      <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>
+        Signed onto every MIRA 205 / 206 export. Stored on this device.</div>
+      <Field label="Declarant name">
+        <input value={decl.name || ""} onChange={(e) => update({ name: e.target.value })}
+          placeholder="Full name" style={inp} /></Field>
+      <Field label="Designation">
+        <input value={decl.designation || ""} onChange={(e) => update({ designation: e.target.value })}
+          placeholder="e.g. Accountant" style={inp} /></Field>
+      <Field label="Contact number">
+        <input value={decl.contact || ""} onChange={(e) => update({ contact: e.target.value })}
+          placeholder="e.g. 7712345" style={inp} /></Field>
+      <div className="flex items-center justify-between gap-3 py-2"
+        style={{ borderTop: `1px solid ${T.line2}`, minHeight: 44 }}>
+        <span style={{ fontSize: 12.5, color: T.muted, flexShrink: 0 }}>Digital signature</span>
+        <div className="flex items-center gap-2">
+          {decl.signature ? (
+            <>
+              <img src={decl.signature} alt="signature" style={{ height: 34, maxWidth: 150,
+                objectFit: "contain", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 6, padding: 2 }} />
+              <button onClick={() => update({ signature: null })}
+                style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 10px", fontSize: 11.5,
+                  color: T.exempt, background: T.surface, cursor: "pointer" }}>Remove</button>
+            </>
+          ) : (
+            <button onClick={() => fileRef.current?.click()}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${T.line}`,
+                borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600, color: T.text,
+                background: T.surface, cursor: "pointer" }}><Upload size={13} /> Upload signature</button>
+          )}
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg" onChange={onFile} style={{ display: "none" }} />
+        </div>
+      </div>
+      {err && <div style={{ fontSize: 11.5, color: T.exempt, marginTop: 4 }}>{err}</div>}
+    </SettingsCard>
+  );
+}
 
 export function Settings({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
@@ -222,6 +280,9 @@ export function Settings({ session, onRequireLogin }) {
               onChange={(e) => set("greenTaxRateUsd", e.target.value)} style={{ ...editInput, width: 120 }} />}
           </Field>
         </SettingsCard>
+
+        {/* MIRA filing declaration + digital signature */}
+        <DeclarationCard />
 
         {/* Team members */}
         <SettingsCard icon={Users} title={`Team${members.length ? ` · ${members.length}` : ""}`}>
