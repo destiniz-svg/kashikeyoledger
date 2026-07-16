@@ -1,9 +1,32 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ScanLine, UploadCloud, FileText, Image as ImageIcon, Check, AlertTriangle,
-  Sparkles, ChevronDown, X } from "lucide-react";
-import { getDocuments, uploadDocument } from "./api.js";
+  Sparkles, ChevronDown, X, Pencil, Wand2, Trash2 } from "lucide-react";
+import { getDocuments, uploadDocument, overrideDocument, getRules, deleteRule } from "./api.js";
 import { T, mono, num, fmt, fmtDate, useW } from "./theme.js";
 import { Eyebrow, KpiTile, TaxChip } from "./ui.jsx";
+
+const TAX_OPTIONS = [
+  ["GGST", "GGST 8%"],
+  ["TGST", "TGST 17%"],
+  ["ZERO_RATED", "Zero-rated"],
+  ["EXEMPT", "Exempt"],
+  ["OUT_OF_SCOPE", "Out of scope"],
+];
+
+// Apply an override locally (sample mode / optimistic) so the UI updates without
+// a server round-trip. Mirrors applyOverrideToExtraction on the backend.
+function overrideLocal(e, o) {
+  const next = { ...e, lines: e.lines.map((l) => ({ ...l })), overridden: true };
+  if (o.taxCategory) {
+    next.predictedTaxCategory = o.taxCategory;
+    next.lines = next.lines.map((l) => ({ ...l, taxCategory: o.taxCategory }));
+  }
+  if (o.accountingCategory) {
+    next.accountingCategory = o.accountingCategory;
+    next.lines = next.lines.map((l) => ({ ...l, accountingCategory: o.accountingCategory }));
+  }
+  return next;
+}
 
 /* ---------------------------------------------------------------------------
    AI Inbox — upload a receipt / invoice / bill and let Claude read it. The file
@@ -119,13 +142,29 @@ function ConfidenceBar({ score }) {
   );
 }
 
-function DocRow({ doc }) {
+function DocRow({ doc, onOverride }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const e = doc.extraction;
   const isPdf = doc.mimeType === "application/pdf";
   const flags = e?.validationFlags || [];
   const failed = doc.status === "EXTRACTION_FAILED";
   const pending = doc.status === "UPLOADED" || doc.status === "EXTRACTING";
+
+  const [tax, setTax] = useState(e?.predictedTaxCategory || "GGST");
+  const [acct, setAcct] = useState(e?.accountingCategory || "");
+  const [learn, setLearn] = useState(true);
+  useEffect(() => { setTax(e?.predictedTaxCategory || "GGST"); setAcct(e?.accountingCategory || ""); }, [e?.predictedTaxCategory, e?.accountingCategory]);
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onOverride(doc.id, { taxCategory: tax, accountingCategory: acct || undefined, createRule: learn });
+      setEditing(false);
+    } finally { setSaving(false); }
+  }
 
   return (
     <div style={{ borderTop: `1px solid ${T.line2}` }}>
@@ -167,14 +206,64 @@ function DocRow({ doc }) {
 
       {open && e && (
         <div className="px-4 sm:px-6 pb-5" style={{ background: T.paper }}>
-          {flags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-1 pb-3">
-              {flags.map((f) => (
-                <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 4,
-                  fontFamily: mono, fontSize: 10.5, fontWeight: 600, color: T.warn,
-                  background: T.warnSoft, padding: "3px 9px", borderRadius: 999 }}>
-                  <AlertTriangle size={11} />{flagText(f)}</span>
-              ))}
+          {/* Provenance + review flags */}
+          <div className="flex flex-wrap items-center gap-1.5 pt-1 pb-3">
+            {e.appliedRule && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+                fontSize: 10.5, fontWeight: 600, color: T.teal, background: T.tealSoft,
+                padding: "3px 9px", borderRadius: 999 }}>
+                <Wand2 size={11} />Applied your rule · {e.appliedRule.label}</span>
+            )}
+            {e.overridden && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: mono,
+                fontSize: 10.5, fontWeight: 600, color: T.claim, background: T.claimSoft,
+                padding: "3px 9px", borderRadius: 999 }}>
+                <Check size={11} />Corrected by you</span>
+            )}
+            {flags.map((f) => (
+              <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 4,
+                fontFamily: mono, fontSize: 10.5, fontWeight: 600, color: T.warn,
+                background: T.warnSoft, padding: "3px 9px", borderRadius: 999 }}>
+                <AlertTriangle size={11} />{flagText(f)}</span>
+            ))}
+            <button onClick={() => setEditing((v) => !v)}
+              style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5,
+                fontFamily: mono, fontSize: 10.5, fontWeight: 600, color: T.muted,
+                border: `1px solid ${T.line}`, background: T.surface, borderRadius: 999,
+                padding: "4px 10px", cursor: "pointer" }}>
+              <Pencil size={11} />{editing ? "Close" : "Correct"}</button>
+          </div>
+
+          {/* Override editor */}
+          {editing && (
+            <div className="rounded-xl p-3.5 mb-3" style={{ background: T.surface, border: `1px solid ${T.teal}` }}>
+              <Eyebrow style={{ marginBottom: 8 }}>Correct the categorisation</Eyebrow>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <div style={{ fontFamily: mono, fontSize: 10, color: T.faint, marginBottom: 4 }}>TAX CATEGORY</div>
+                  <select value={tax} onChange={(ev) => setTax(ev.target.value)}
+                    style={{ border: `1px solid ${T.line}`, borderRadius: 9, padding: "8px 10px",
+                      fontSize: 12.5, color: T.text, background: T.surface }}>
+                    {TAX_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <div style={{ fontFamily: mono, fontSize: 10, color: T.faint, marginBottom: 4 }}>ACCOUNTING CATEGORY</div>
+                  <input value={acct} onChange={(ev) => setAcct(ev.target.value)} placeholder="e.g. Tourism activities"
+                    style={{ width: "100%", border: `1px solid ${T.line}`, borderRadius: 9, padding: "8px 10px",
+                      fontSize: 12.5, color: T.text, background: T.surface }} />
+                </div>
+                <button onClick={save} disabled={saving}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.ink, color: "#fff",
+                    borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 600,
+                    cursor: saving ? "default" : "pointer", opacity: saving ? 0.7 : 1 }}>
+                  <Check size={14} />{saving ? "Saving…" : "Save"}</button>
+              </div>
+              <label className="flex items-center gap-2 mt-3" style={{ cursor: "pointer" }}>
+                <input type="checkbox" checked={learn} onChange={(ev) => setLearn(ev.target.checked)} />
+                <span style={{ fontSize: 12, color: T.muted }}>
+                  Remember this for {e.vendorName || "this vendor"} — auto-apply to future documents</span>
+              </label>
             </div>
           )}
 
@@ -240,6 +329,7 @@ const Total = ({ label, v, strong }) => (
 export function AIInbox({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
   const [docs, setDocs] = useState(SAMPLE_DOCS);
+  const [rules, setRules] = useState([]);
   const [live, setLive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -253,7 +343,40 @@ export function AIInbox({ session, onRequireLogin }) {
       if (d?.documents) { setDocs(d.documents); setLive(true); }
     } catch { /* keep sample */ }
   }
-  useEffect(() => { load(); }, []);
+  async function loadRules() {
+    try { const r = await getRules(); if (r?.rules) setRules(r.rules); } catch { /* ignore */ }
+  }
+  useEffect(() => { load(); loadRules(); }, []);
+
+  // Apply a human correction. Live: persist + refetch. Sample: optimistic local.
+  async function handleOverride(docId, payload) {
+    if (live && !session) { onRequireLogin(); throw new Error("sign in"); }
+    setErr(null); setNote(null);
+    if (live) {
+      const res = await overrideDocument(docId, payload);
+      await load();
+      await loadRules();
+      setNote(res?.rule ? "Saved — I'll auto-apply this next time." : "Correction saved.");
+    } else {
+      setDocs((prev) => prev.map((d) =>
+        d.id === docId && d.extraction
+          ? { ...d, extraction: overrideLocal(d.extraction, payload) } : d));
+      if (payload.createRule) {
+        const doc = docs.find((d) => d.id === docId);
+        const label = `vendor "${doc?.extraction?.vendorName || "—"}" → ${payload.taxCategory}`;
+        setRules((prev) => [{ id: `sample-${prev.length + 1}`, label,
+          setTaxCategory: payload.taxCategory, setAccountingCategory: payload.accountingCategory || null,
+          timesApplied: 0, matchVendorPattern: doc?.extraction?.vendorName || null }, ...prev]);
+      }
+      setNote("Sample mode — correction applied locally. Sign in to save it.");
+    }
+  }
+
+  async function removeRule(id) {
+    if (live && !session) { onRequireLogin(); return; }
+    if (live) { try { await deleteRule(id); await loadRules(); } catch { setErr("Couldn't remove that rule."); } }
+    else setRules((prev) => prev.filter((r) => r.id !== id));
+  }
 
   async function handleFiles(fileList) {
     const files = Array.from(fileList || []);
@@ -354,9 +477,36 @@ export function AIInbox({ session, onRequireLogin }) {
           <div style={{ padding: "34px 16px", textAlign: "center", fontFamily: mono, fontSize: 12, color: T.faint }}>
             No documents yet — upload one above to get started.</div>
         ) : (
-          docs.map((d) => <DocRow key={d.id} doc={d} />)
+          docs.map((d) => <DocRow key={d.id} doc={d} onOverride={handleOverride} />)
         )}
       </div>
+
+      {/* Learned rules */}
+      {rules.length > 0 && (
+        <div className="rounded-2xl overflow-hidden mt-5" style={{ border: `1px solid ${T.line}`, background: T.surface }}>
+          <div className="flex items-center gap-2 px-4 sm:px-6 py-4" style={{ borderBottom: `1px solid ${T.line}` }}>
+            <Wand2 size={16} color={T.teal} />
+            <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>Learned rules</div>
+            <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>· from your corrections</span>
+          </div>
+          {rules.map((r, i) => (
+            <div key={r.id} className="flex items-center gap-3 px-4 sm:px-6 py-3"
+              style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+              <div className="min-w-0 flex-1">
+                <div style={{ fontSize: 12.5, color: T.text, overflow: "hidden", textOverflow: "ellipsis",
+                  whiteSpace: "nowrap" }}>{r.label || `${r.matchVendorPattern || r.matchVendorTin || r.matchKeyword} → ${r.setTaxCategory || r.setAccountingCategory}`}</div>
+                {r.timesApplied > 0 && (
+                  <div style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>
+                    applied {r.timesApplied} time{r.timesApplied === 1 ? "" : "s"}</div>
+                )}
+              </div>
+              {r.setTaxCategory && <TaxChip c={r.setTaxCategory} />}
+              <button onClick={() => removeRule(r.id)} title="Remove rule"
+                style={{ color: T.faint, cursor: "pointer", padding: 4 }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

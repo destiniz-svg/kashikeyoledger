@@ -41,6 +41,15 @@ export interface ExtractionLine {
   accountingCategory: string;
 }
 
+/** How a saved categorization rule matched, for explainability. */
+export interface AppliedRule {
+  id: string;
+  label: string; // e.g. "vendor TIN 1005632GST001 → TGST"
+  matchedOn: string; // "vendor TIN" | "vendor name" | "keyword"
+  wasTaxCategory: string;
+  wasAccountingCategory: string | null;
+}
+
 /** The structured result of reading one document. */
 export interface Extraction {
   documentType: string;
@@ -61,6 +70,10 @@ export interface Extraction {
   aiReasoning: string;
   fieldConfidence: Record<string, number>;
   validationFlags: string[];
+  /** A learned rule that was auto-applied to this extraction (Phase 3), if any. */
+  appliedRule?: AppliedRule | null;
+  /** True once a human has corrected this extraction (Phase 3). */
+  overridden?: boolean;
 }
 
 /**
@@ -299,6 +312,8 @@ export function normalizeExtraction(raw: unknown): Extraction {
     aiReasoning: String(r.ai_reasoning ?? "").trim(),
     fieldConfidence,
     validationFlags: [],
+    appliedRule: (r.appliedRule as Extraction["appliedRule"]) ?? null,
+    overridden: Boolean(r.overridden),
   };
 }
 

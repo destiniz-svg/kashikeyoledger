@@ -8,8 +8,18 @@
  * match the `numeric` debit/credit columns in the database.
  */
 import type { Extraction } from "./aiExtract.ts";
+import type { CategorizationRule, OverrideInput } from "./rules.ts";
 
 export type { Extraction } from "./aiExtract.ts";
+export type { CategorizationRule, OverrideInput, RuleInput } from "./rules.ts";
+
+/** Outcome of applying a human override to a document's extraction (Phase 3). */
+export interface OverrideResult {
+  documentId: string;
+  extraction: Extraction;
+  /** The categorization rule learned from this override, if one was created. */
+  rule: CategorizationRule | null;
+}
 
 /** A chart-of-accounts entry. `accountType` is one of the DB-allowed types. */
 export interface AccountRow {
@@ -571,6 +581,17 @@ export interface LedgerStore {
   ingestDocument(upload: DocumentUpload): Promise<IngestResult>;
   /** Uploaded documents with their latest extraction, newest first. */
   listDocuments(): Promise<DocumentRow[]>;
+
+  /**
+   * Apply a human correction to a document's extraction (Phase 3). Updates the
+   * stored extraction and, unless `createRule` is false, learns a categorization
+   * rule so future documents from the same vendor/keyword are auto-corrected.
+   */
+  overrideExtraction(documentId: string, override: OverrideInput): Promise<OverrideResult>;
+  /** Active categorization rules for the org (Phase 3), highest priority first. */
+  listRules(): Promise<CategorizationRule[]>;
+  /** Deactivate a categorization rule. */
+  deleteRule(id: string): Promise<{ id: string }>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);

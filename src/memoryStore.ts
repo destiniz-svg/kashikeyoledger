@@ -30,6 +30,7 @@ import {
   type MemberRow,
   type OrgSettings,
   type OrgSettingsPatch,
+  type OverrideResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -49,6 +50,16 @@ import {
   normalizeExtraction,
   type Extraction,
 } from "./aiExtract.ts";
+import {
+  applyOverrideToExtraction,
+  applyRuleToExtraction,
+  buildRuleFromOverride,
+  matchRule,
+  normalizeRuleInput,
+  ruleLabel,
+  type CategorizationRule,
+  type OverrideInput,
+} from "./rules.ts";
 
 /**
  * A canned extraction so the AI ingestion flow works end-to-end on the in-memory
@@ -172,6 +183,7 @@ export class MemoryStore implements LedgerStore {
   readonly #bills = DEMO_BILLS.map((b) => ({ ...b }));
   readonly #bankTxns = DEMO_BANK_TXNS.map((t) => ({ ...t }));
   readonly #documents: DocumentRow[] = [];
+  readonly #rules: CategorizationRule[] = [];
 
   constructor(seed = true) {
     if (seed) {
@@ -463,7 +475,13 @@ export class MemoryStore implements LedgerStore {
   async ingestDocument(upload: DocumentUpload): Promise<IngestResult> {
     const { bytes } = assertUpload(upload);
     const mimeType = mediaTypeFor(upload.contentType); // rejects unsupported types
-    const extraction = cannedExtraction(upload.filename);
+    let extraction = cannedExtraction(upload.filename);
+    // Phase 3: auto-apply a learned rule if one matches this document.
+    const hit = matchRule(extraction, this.#rules);
+    if (hit) {
+      extraction = applyRuleToExtraction(extraction, hit.rule, hit.matchedOn);
+      hit.rule.timesApplied += 1;
+    }
     const doc: DocumentRow = {
       id: `doc-${++this.#idSeq}`,
       fileName: upload.filename,
@@ -491,6 +509,69 @@ export class MemoryStore implements LedgerStore {
 
   async listDocuments(): Promise<DocumentRow[]> {
     return this.#documents.map((d) => ({ ...d }));
+  }
+
+  async overrideExtraction(documentId: string, override: OverrideInput): Promise<OverrideResult> {
+    const doc = this.#documents.find((d) => d.id === documentId);
+    if (!doc || !doc.extraction) {
+      throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    }
+    doc.extraction = applyOverrideToExtraction(doc.extraction, override);
+    let rule: CategorizationRule | null = null;
+    if (override.createRule !== false) {
+      const input = buildRuleFromOverride(doc.extraction, override);
+      if (input) rule = this.#upsertRule(input);
+    }
+    return { documentId, extraction: doc.extraction, rule };
+  }
+
+  #upsertRule(input: unknown): CategorizationRule {
+    const r = normalizeRuleInput(input);
+    // Replace an existing active rule with the same matcher, else create one.
+    const existing = this.#rules.find(
+      (x) =>
+        x.isActive !== false &&
+        x.matchVendorTin === r.matchVendorTin &&
+        x.matchVendorPattern === r.matchVendorPattern &&
+        x.matchKeyword === r.matchKeyword,
+    );
+    if (existing) {
+      existing.setTaxCategory = r.setTaxCategory;
+      existing.setAccountingCategory = r.setAccountingCategory;
+      existing.note = r.note;
+      existing.priority = r.priority;
+      return existing;
+    }
+    const rule: CategorizationRule = {
+      id: `rule-${++this.#idSeq}`,
+      matchVendorTin: r.matchVendorTin,
+      matchVendorPattern: r.matchVendorPattern,
+      matchKeyword: r.matchKeyword,
+      setTaxCategory: r.setTaxCategory,
+      setAccountingCategory: r.setAccountingCategory,
+      note: r.note,
+      priority: r.priority,
+      timesApplied: 0,
+      source: "HUMAN_OVERRIDE",
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    };
+    this.#rules.push(rule);
+    return rule;
+  }
+
+  async listRules(): Promise<CategorizationRule[]> {
+    return this.#rules
+      .filter((r) => r.isActive !== false)
+      .sort((a, b) => a.priority - b.priority || String(a.createdAt).localeCompare(String(b.createdAt)))
+      .map((r) => ({ ...r, label: ruleLabel(r) }));
+  }
+
+  async deleteRule(id: string): Promise<{ id: string }> {
+    const rule = this.#rules.find((r) => r.id === id);
+    if (!rule) throw new StoreError(`Rule "${id}" not found`, 404);
+    rule.isActive = false;
+    return { id };
   }
 
   async listVendors(): Promise<VendorRow[]> {

@@ -219,6 +219,9 @@ const server = createServer(async (req, res) => {
           "GET /transactions  [read]",
           "GET /documents  [read]",
           "POST /documents { filename, contentType, dataBase64, captureSource? }  [write]",
+          "POST /documents/:id/override { taxCategory?, accountingCategory?, vendorTin?, createRule?, ruleScope? }  [write]",
+          "GET /rules  [read]",
+          "DELETE /rules/:id  [write]",
           "GET /settings  [read]",
           "PATCH /settings { name?, tin?, sector?, timezone?, gstRegistered?, ... }  [write]",
           "POST /bills/:id/approve  [write]",
@@ -503,6 +506,37 @@ const server = createServer(async (req, res) => {
         captureSource: body.captureSource,
       });
       return send(res, 201, result);
+    }
+
+    const overrideMatch = /^\/documents\/([^/]+)\/override$/.exec(path);
+    if (method === "POST" && overrideMatch) {
+      const [, docId] = overrideMatch;
+      const body = (await readJson(req)) as {
+        taxCategory?: string;
+        accountingCategory?: string;
+        vendorTin?: string;
+        createRule?: boolean;
+        ruleScope?: "vendor" | "keyword";
+      };
+      const result = await store.overrideExtraction(docId, {
+        taxCategory: body.taxCategory,
+        accountingCategory: body.accountingCategory,
+        vendorTin: body.vendorTin,
+        createRule: body.createRule,
+        ruleScope: body.ruleScope,
+      });
+      return send(res, 200, result);
+    }
+
+    if (method === "GET" && path === "/rules") {
+      if (!(await readGuard(req, res))) return;
+      return send(res, 200, { rules: await store.listRules() });
+    }
+
+    const ruleMatch = /^\/rules\/([^/]+)$/.exec(path);
+    if (method === "DELETE" && ruleMatch) {
+      const [, ruleId] = ruleMatch;
+      return send(res, 200, await store.deleteRule(ruleId));
     }
 
     if ((method === "PATCH" || method === "PUT") && path === "/settings") {

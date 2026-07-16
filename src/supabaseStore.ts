@@ -32,6 +32,7 @@ import {
   type MemberRow,
   type OrgSettings,
   type OrgSettingsPatch,
+  type OverrideResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -50,6 +51,50 @@ import {
   mediaTypeFor,
   type Extraction,
 } from "./aiExtract.ts";
+import {
+  applyOverrideToExtraction,
+  applyRuleToExtraction,
+  buildRuleFromOverride,
+  matchRule,
+  normalizeRuleInput,
+  ruleLabel,
+  type CategorizationRule,
+  type OverrideInput,
+} from "./rules.ts";
+
+interface DbRule {
+  id: string;
+  match_vendor_tin: string | null;
+  match_vendor_pattern: string | null;
+  match_keyword: string | null;
+  set_tax_category: string | null;
+  set_accounting_category: string | null;
+  note: string | null;
+  priority: number;
+  times_applied: number;
+  source: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+function toRule(r: DbRule): CategorizationRule {
+  const rule: CategorizationRule = {
+    id: r.id,
+    matchVendorTin: r.match_vendor_tin,
+    matchVendorPattern: r.match_vendor_pattern,
+    matchKeyword: r.match_keyword,
+    setTaxCategory: r.set_tax_category,
+    setAccountingCategory: r.set_accounting_category,
+    note: r.note,
+    priority: r.priority,
+    timesApplied: r.times_applied,
+    source: r.source,
+    isActive: r.is_active,
+    createdAt: r.created_at,
+  };
+  rule.label = ruleLabel(rule);
+  return rule;
+}
 
 export interface SupabaseConfig {
   url: string;
@@ -829,13 +874,19 @@ export class SupabaseStore implements LedgerStore {
 
     try {
       await this.#setDocumentStatus(documentId, "EXTRACTING");
-      const extraction = await extractDocument({
+      let extraction = await extractDocument({
         apiKey: this.#anthropicKey,
         model: this.#anthropicModel,
         base64: upload.dataBase64,
         contentType: mimeType,
         filename: upload.filename,
       });
+      // Phase 3: auto-apply a learned categorization rule if one matches.
+      const hit = matchRule(extraction, await this.#activeRules());
+      if (hit) {
+        extraction = applyRuleToExtraction(extraction, hit.rule, hit.matchedOn);
+        await this.#bumpRuleApplied(hit.rule.id, hit.rule.timesApplied);
+      }
       await this.#request("/rest/v1/ai_extractions", {
         method: "POST",
         body: JSON.stringify({
@@ -875,6 +926,102 @@ export class SupabaseStore implements LedgerStore {
         `ai_extractions(model,raw_output)&order=created_at.desc`,
     )) as DbDocument[];
     return rows.map((r) => this.#toDocumentRow(r));
+  }
+
+  async #activeRules(): Promise<CategorizationRule[]> {
+    const rows = (await this.#request(
+      `/rest/v1/categorization_rules?organization_id=eq.${this.org}&is_active=eq.true` +
+        `&select=id,match_vendor_tin,match_vendor_pattern,match_keyword,set_tax_category,` +
+        `set_accounting_category,note,priority,times_applied,source,is_active,created_at` +
+        `&order=priority.asc,created_at.asc`,
+    )) as DbRule[];
+    return rows.map(toRule);
+  }
+
+  async #bumpRuleApplied(id: string, current: number): Promise<void> {
+    await this.#request(`/rest/v1/categorization_rules?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ times_applied: current + 1, updated_at: new Date().toISOString() }),
+    }).catch(() => {});
+  }
+
+  async listRules(): Promise<CategorizationRule[]> {
+    return this.#activeRules();
+  }
+
+  async deleteRule(id: string): Promise<{ id: string }> {
+    await this.#request(`/rest/v1/categorization_rules?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
+    });
+    return { id };
+  }
+
+  /** Insert a rule, or update the active one with the same matcher. */
+  async #upsertRule(input: unknown): Promise<CategorizationRule> {
+    const r = normalizeRuleInput(input);
+    const eq = (col: string, v: string | null) => (v == null ? `${col}=is.null` : `${col}=eq.${encodeURIComponent(v)}`);
+    const existing = (await this.#request(
+      `/rest/v1/categorization_rules?organization_id=eq.${this.org}&is_active=eq.true` +
+        `&${eq("match_vendor_tin", r.matchVendorTin)}&${eq("match_vendor_pattern", r.matchVendorPattern)}` +
+        `&${eq("match_keyword", r.matchKeyword)}&select=id&limit=1`,
+    )) as { id: string }[];
+    const body = {
+      set_tax_category: r.setTaxCategory,
+      set_accounting_category: r.setAccountingCategory,
+      note: r.note,
+      priority: r.priority,
+    };
+    if (existing[0]) {
+      const rows = (await this.#request(
+        `/rest/v1/categorization_rules?id=eq.${existing[0].id}&organization_id=eq.${this.org}`,
+        { method: "PATCH", headers: { prefer: "return=representation" },
+          body: JSON.stringify({ ...body, is_active: true, updated_at: new Date().toISOString() }) },
+      )) as DbRule[];
+      return toRule(rows[0] as DbRule);
+    }
+    const rows = (await this.#request("/rest/v1/categorization_rules", {
+      method: "POST",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        organization_id: this.org,
+        match_vendor_tin: r.matchVendorTin,
+        match_vendor_pattern: r.matchVendorPattern,
+        match_keyword: r.matchKeyword,
+        source: "HUMAN_OVERRIDE",
+        ...body,
+      }),
+    })) as DbRule[];
+    const created = rows[0];
+    if (!created) throw new StoreError("Rule was not created", 500);
+    return toRule(created);
+  }
+
+  async overrideExtraction(documentId: string, override: OverrideInput): Promise<OverrideResult> {
+    // Load the document's latest extraction row.
+    const rows = (await this.#request(
+      `/rest/v1/ai_extractions?document_id=eq.${documentId}&organization_id=eq.${this.org}` +
+        `&select=id,raw_output&order=created_at.desc&limit=1`,
+    )) as { id: string; raw_output: Extraction }[];
+    const row = rows[0];
+    if (!row) throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+
+    const extraction = applyOverrideToExtraction(row.raw_output, override);
+    await this.#request(`/rest/v1/ai_extractions?id=eq.${row.id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        raw_output: extraction,
+        field_confidence: extraction.fieldConfidence,
+        validation_flags: extraction.validationFlags,
+      }),
+    });
+
+    let rule: CategorizationRule | null = null;
+    if (override.createRule !== false) {
+      const input = buildRuleFromOverride(extraction, override);
+      if (input) rule = await this.#upsertRule(input);
+    }
+    return { documentId, extraction, rule };
   }
 
   async verifyMember(token: string): Promise<boolean> {

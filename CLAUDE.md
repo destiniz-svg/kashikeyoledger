@@ -132,6 +132,33 @@ header dependency).
   extraction so the flow works with no key/DB. Frontend: the **AI Inbox** screen
   (`frontend/src/AIInbox.jsx`) — dropzone upload + explainable results.
 
+## Explainable AI & human override (Phase 3)
+
+Every extraction already ships its `confidenceScore`, per-field confidence and
+`aiReasoning` (Phase 2). Phase 3 lets a human **correct** an extraction and
+learns from it (`src/rules.ts`, pure/testable):
+
+- **`POST /documents/:id/override`** `{ taxCategory?, accountingCategory?,
+  vendorTin?, createRule?, ruleScope? }` (write-guarded) rewrites the stored
+  extraction (document- and line-level), marks it `overridden`, recomputes
+  `validationFlags`, and — unless `createRule:false` — saves a
+  **categorization rule**. The rule keys on the vendor TIN (preferred), else the
+  vendor name, or a keyword (`ruleScope:"keyword"`).
+- **Auto-apply**: on ingest, `matchRule` finds the best active rule (lowest
+  `priority`, then oldest) and `applyRuleToExtraction` rewrites the categories,
+  recording `appliedRule` provenance (`label`, `matchedOn`, the original
+  category) and bumping `times_applied`. Provenance lives in `appliedRule` /
+  `overridden`, **not** in `validationFlags` (so a cleanly-ruled doc isn't
+  counted as "needs review").
+- **`GET /rules`** lists active rules (with a human `label`); **`DELETE
+  /rules/:id`** soft-deactivates one (`is_active=false`).
+- Table [`supabase/phase3_categorization_rules.sql`](supabase/phase3_categorization_rules.sql):
+  `categorization_rules` (org-scoped; check constraints require ≥1 matcher and
+  ≥1 outcome; audited by `fn_audit`). The **in-memory** backend keeps rules in
+  process so the learn-and-apply loop works with no key/DB. Frontend: the **AI
+  Inbox** override editor (tax + accounting category, "remember this vendor")
+  and a **Learned rules** panel.
+
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`
