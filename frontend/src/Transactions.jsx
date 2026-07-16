@@ -105,8 +105,8 @@ export function Transactions() {
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
             <tbody>
-              {rows.map((t) => (
-                <tr key={`${t.kind}-${t.id}`} style={{ borderBottom: `1px solid ${T.line2}` }}>
+              {rows.map((t, i) => (
+                <tr key={`${t.kind}-${t.id}`} className="k-in" style={{ borderBottom: `1px solid ${T.line2}`, animationDelay: `${Math.min(i, 14) * 22}ms` }}>
                   <td style={{ padding: "12px 16px", ...num, fontSize: 12, color: T.muted, whiteSpace: "nowrap" }}>{t.date}</td>
                   <td style={{ padding: "12px 16px" }}><KindChip k={t.kind} /></td>
                   <td style={{ padding: "12px 16px" }}>

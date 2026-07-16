@@ -86,8 +86,8 @@ export function Bills() {
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
             <tbody>
-              {bills.map((b) => (
-                <tr key={b.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+              {bills.map((b, i) => (
+                <tr key={b.id} className="k-in" style={{ borderBottom: `1px solid ${T.line2}`, animationDelay: `${Math.min(i, 12) * 26}ms` }}>
                   <td style={{ padding: "13px 16px" }}>
                     <div style={{ fontSize: 13, fontWeight: 550, color: T.text }}>{b.vendor}</div>
                     <div style={{ fontFamily: mono, fontSize: 10.5, color: T.faint }}>{b.cat}</div></td>

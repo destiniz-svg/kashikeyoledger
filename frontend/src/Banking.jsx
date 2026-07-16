@@ -318,8 +318,8 @@ export function Banking({ session, onRequireLogin }) {
 
       {/* Account cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
-        {data.accounts.map((a) => (
-          <div key={a.id} className="rounded-2xl p-5" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+        {data.accounts.map((a, i) => (
+          <div key={a.id} className="rounded-2xl p-5 k-in k-lift" style={{ background: T.surface, border: `1px solid ${T.line}`, animationDelay: `${i * 60}ms` }}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div style={{ width: 38, height: 38, borderRadius: 11, background: T.tealSoft,
@@ -402,10 +402,10 @@ export function Banking({ session, onRequireLogin }) {
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
             <tbody>
-              {txns.map((t) => {
+              {txns.map((t, i) => {
                 const inflow = t.amount >= 0;
                 return (
-                  <tr key={t.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+                  <tr key={t.id} className="k-in" style={{ borderBottom: `1px solid ${T.line2}`, animationDelay: `${Math.min(i, 12) * 24}ms` }}>
                     <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
                       <div style={{ ...num, fontSize: 12, color: T.text }}>{t.date}</div>
                       <div style={{ fontFamily: mono, fontSize: 10, color: T.faint }}>{t.accountName}</div></td>
