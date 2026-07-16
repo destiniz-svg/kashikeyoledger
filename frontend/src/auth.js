@@ -25,14 +25,26 @@ export function getToken() {
 
 export async function signIn(email, password) {
   if (!authConfigured) throw new Error("Auth is not configured for this site.");
-  const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: { apikey: SB_ANON, "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  let res;
+  try {
+    res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { apikey: SB_ANON, "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    // fetch itself failed — wrong URL, DNS, CORS or offline.
+    throw new Error(`Couldn't reach the auth server at ${SB_URL || "(no URL set)"}`);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error_description || data.msg || data.error || "Sign-in failed");
+    // GoTrue uses several field names: error_description (bad login), msg
+    // (rate limit etc.), message ("Invalid API key" on a bad anon key). Surface
+    // whichever is present so the real reason isn't hidden as "Sign-in failed".
+    const detail =
+      data.error_description || data.msg || data.message || data.error_code ||
+      data.error || `HTTP ${res.status}`;
+    throw new Error(detail);
   }
   const session = {
     access_token: data.access_token,
