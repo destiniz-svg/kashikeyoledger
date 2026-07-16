@@ -102,6 +102,36 @@ tax logic stays isolated and replicable (see
   base = 1:1 and requires a real rate for foreign currency; `grand_total_base`,
   `tax_total_base`, `amount_base` are generated MVR amounts.
 
+## AI ingestion (Phase 2)
+
+Upload a receipt/invoice/bill and Claude reads it into structured, MIRA-mapped
+data. Dependency-free — `src/aiExtract.ts` calls the Anthropic Messages API over
+`fetch` (no SDK), model `claude-opus-4-8`, vision for images and a `document`
+block for PDFs. A single forced tool (`record_extraction`, `tool_choice`) makes
+the reply structured JSON we normalize and validate in code (no `strict`/beta
+header dependency).
+
+- **`POST /documents`** `{ filename, contentType, dataBase64, captureSource? }`
+  (write-guarded; body cap raised to 15 MB for the base64 payload). Flow:
+  store the file at `documents/<org>/<sha256>` (deduped by hash — re-uploading
+  the same bytes returns the saved extraction, no second Claude call), insert a
+  `documents` row, run extraction, write `ai_extractions`, move the doc to
+  `EXTRACTED`/`EXTRACTION_FAILED`. **`GET /documents`** lists docs + extractions.
+- **No `ANTHROPIC_API_KEY`** → the file is still stored, extraction is skipped,
+  the doc stays `UPLOADED`, and the result carries an `error` note. Set
+  `ANTHROPIC_API_KEY` (and optional `ANTHROPIC_MODEL`) as Railway service vars.
+- The extraction captures vendor + **TIN**, dates, currency + FX, line items
+  (each with a MIRA `taxCategory` + rate + accounting category), totals, a
+  `predictedTaxCategory`, `confidenceScore`, `aiReasoning`, per-field confidence
+  and derived `validationFlags` (e.g. `MISSING_VENDOR_TIN`, `TOTALS_MISMATCH`,
+  `FOREIGN_CURRENCY_NO_FX`). The Maldives context (MVR/Rf, Thaana/English, the
+  GGST 8% / TGST 17% / zero-rated / exempt / out-of-scope categories) lives in
+  `EXTRACTION_SYSTEM_PROMPT`.
+- Storage bucket: [`supabase/phase2_ai_ingestion.sql`](supabase/phase2_ai_ingestion.sql)
+  (private, service-role only). The **in-memory** backend returns a canned
+  extraction so the flow works with no key/DB. Frontend: the **AI Inbox** screen
+  (`frontend/src/AIInbox.jsx`) — dropzone upload + explainable results.
+
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`

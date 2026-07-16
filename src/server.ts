@@ -93,12 +93,17 @@ const TAX_LABEL: Record<string, string> = {
   OUT_OF_SCOPE: "Out of scope",
 };
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+/** Default JSON body cap (1 MB); document uploads pass a larger limit. */
+const MAX_BODY = 1_000_000;
+/** Upload bodies carry base64 file data, so allow ~15 MB (≈10 MB file). */
+const MAX_UPLOAD_BODY = 15_000_000;
+
+async function readJson(req: IncomingMessage, maxBytes = MAX_BODY): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1_000_000) throw new Error("Request body too large");
+    if (size > maxBytes) throw new StoreError("Request body too large", 413);
     chunks.push(chunk as Buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -212,6 +217,8 @@ const server = createServer(async (req, res) => {
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
           "GET /transactions  [read]",
+          "GET /documents  [read]",
+          "POST /documents { filename, contentType, dataBase64, captureSource? }  [write]",
           "GET /settings  [read]",
           "PATCH /settings { name?, tin?, sector?, timezone?, gstRegistered?, ... }  [write]",
           "POST /bills/:id/approve  [write]",
@@ -460,6 +467,42 @@ const server = createServer(async (req, res) => {
           net: round2(moneyIn - moneyOut),
         },
       });
+    }
+
+    if (method === "GET" && path === "/documents") {
+      if (!(await readGuard(req, res))) return;
+      const documents = await store.listDocuments();
+      const flagged = documents.filter(
+        (d) => (d.extraction?.validationFlags?.length ?? 0) > 0,
+      ).length;
+      return send(res, 200, {
+        documents,
+        summary: {
+          total: documents.length,
+          extracted: documents.filter((d) => d.status === "EXTRACTED").length,
+          failed: documents.filter((d) => d.status === "EXTRACTION_FAILED").length,
+          needsReview: flagged,
+        },
+      });
+    }
+
+    if (method === "POST" && path === "/documents") {
+      const body = (await readJson(req, MAX_UPLOAD_BODY)) as {
+        filename?: string;
+        contentType?: string;
+        dataBase64?: string;
+        captureSource?: string;
+      };
+      if (!body.filename || !body.contentType || !body.dataBase64) {
+        return send(res, 400, { error: "filename, contentType and dataBase64 are required" });
+      }
+      const result = await store.ingestDocument({
+        filename: body.filename,
+        contentType: body.contentType,
+        dataBase64: body.dataBase64,
+        captureSource: body.captureSource,
+      });
+      return send(res, 201, result);
     }
 
     if ((method === "PATCH" || method === "PUT") && path === "/settings") {

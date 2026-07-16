@@ -7,6 +7,9 @@
  * Amounts are plain decimal numbers in major currency units (e.g. MVR), to
  * match the `numeric` debit/credit columns in the database.
  */
+import type { Extraction } from "./aiExtract.ts";
+
+export type { Extraction } from "./aiExtract.ts";
 
 /** A chart-of-accounts entry. `accountType` is one of the DB-allowed types. */
 export interface AccountRow {
@@ -389,6 +392,76 @@ export function nameInitials(name: string, email = ""): string {
   return src.slice(0, 2).toUpperCase();
 }
 
+/** Capture sources a document may arrive from (capture_source enum). */
+export const CAPTURE_SOURCES = [
+  "MANUAL_UPLOAD",
+  "EMAIL_IN",
+  "MOBILE_APP",
+  "POS_API",
+  "BANK_IMPORT",
+] as const;
+
+/** A document (receipt/invoice) uploaded for AI extraction. */
+export interface DocumentUpload {
+  filename: string;
+  contentType: string;
+  dataBase64: string;
+  captureSource?: string;
+}
+
+/** Outcome of ingesting one document: the stored file + its AI extraction. */
+export interface IngestResult {
+  documentId: string | null;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  status: string; // document_status: EXTRACTED | EXTRACTION_FAILED | UPLOADED
+  model: string | null;
+  duplicate: boolean;
+  extraction: Extraction | null;
+  error: string | null;
+}
+
+/** A stored document plus its latest extraction, for the review screen. */
+export interface DocumentRow {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  status: string;
+  captureSource: string;
+  createdAt: string;
+  model: string | null;
+  extraction: Extraction | null;
+}
+
+/**
+ * Validate an incoming document upload: a filename, a supported content type and
+ * non-empty base64 data. Returns the decoded byte length. Throws StoreError.
+ */
+export function assertUpload(u: DocumentUpload): { bytes: number } {
+  if (!u || typeof u !== "object") throw new StoreError("A document upload is required");
+  if (!u.filename || !String(u.filename).trim()) {
+    throw new StoreError("filename is required");
+  }
+  if (!u.contentType || !String(u.contentType).trim()) {
+    throw new StoreError("contentType is required");
+  }
+  const data = String(u.dataBase64 ?? "");
+  if (!data) throw new StoreError("dataBase64 is required");
+  let bytes: number;
+  try {
+    bytes = Buffer.from(data, "base64").length;
+  } catch {
+    throw new StoreError("dataBase64 is not valid base64");
+  }
+  if (bytes === 0) throw new StoreError("dataBase64 decoded to an empty file");
+  if (u.captureSource && !(CAPTURE_SOURCES as readonly string[]).includes(u.captureSource)) {
+    throw new StoreError(`captureSource must be one of ${CAPTURE_SOURCES.join(", ")}`);
+  }
+  return { bytes };
+}
+
 /** A vendor with spend rollups, shaped for the Vendors screen. */
 export interface VendorRow {
   id: string;
@@ -488,6 +561,16 @@ export interface LedgerStore {
   updateOrgSettings(patch: OrgSettingsPatch): Promise<OrgSettings>;
   /** Team members of the organization. */
   listMembers(): Promise<MemberRow[]>;
+
+  /**
+   * Ingest an uploaded receipt/invoice: store the file, run AI extraction, and
+   * persist the structured result. Re-uploading the same bytes is deduplicated
+   * (returns the existing extraction). Degrades gracefully when AI isn't
+   * configured (stores the file, returns extraction: null with an error note).
+   */
+  ingestDocument(upload: DocumentUpload): Promise<IngestResult>;
+  /** Uploaded documents with their latest extraction, newest first. */
+  listDocuments(): Promise<DocumentRow[]>;
 }
 
 const COMPANY_SUFFIX = new Set(["pvt", "ltd", "llp", "limited", "private", "inc", "co", "company"]);

@@ -8,6 +8,7 @@ import {
   STATEMENT_SOURCES,
   agingBucket,
   assertReconStatus,
+  assertUpload,
   bankTxnSigned,
   computeSale,
   formatBillDate,
@@ -21,6 +22,9 @@ import {
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type DocumentRow,
+  type DocumentUpload,
+  type IngestResult,
   type ImportLineInput,
   type ImportResult,
   type MemberRow,
@@ -38,6 +42,55 @@ import {
   type TrialBalanceRow,
   type VendorRow,
 } from "./store.ts";
+import {
+  DEFAULT_EXTRACTION_MODEL,
+  deriveValidationFlags,
+  mediaTypeFor,
+  normalizeExtraction,
+  type Extraction,
+} from "./aiExtract.ts";
+
+/**
+ * A canned extraction so the AI ingestion flow works end-to-end on the in-memory
+ * backend (no Supabase, no Anthropic key). Modelled on a typical Maldivian
+ * hardware-supplier invoice; validation flags are derived the same way as live.
+ */
+function cannedExtraction(filename: string): Extraction {
+  const e = normalizeExtraction({
+    document_type: "INVOICE",
+    vendor_name: "Island Mark Hardware Pvt Ltd",
+    vendor_tin: null,
+    invoice_number: "IMH-4471",
+    document_date: "2026-05-11",
+    due_date: "2026-05-26",
+    currency: "MVR",
+    fx_rate_to_mvr: null,
+    line_items: [
+      {
+        description: "Assorted fixings & tools",
+        quantity: 12,
+        unit_price: 358.33,
+        amount: 4300,
+        tax_category: "GGST",
+        tax_rate_percent: 8,
+        accounting_category: "Hardware",
+      },
+    ],
+    subtotal: 4300,
+    tax_total: 344,
+    grand_total: 4644,
+    accounting_category: "Hardware",
+    predicted_tax_category: "GGST",
+    confidence_score: 0.82,
+    ai_reasoning:
+      `Sample extraction for "${filename}". General hardware supplies at the 8% ` +
+      "GGST rate (no tourism indicators). The vendor TIN is not printed, so an " +
+      "input-tax claim needs it confirmed.",
+    field_confidence: { vendor_name: 0.9, grand_total: 0.88, predicted_tax_category: 0.8 },
+  });
+  e.validationFlags = deriveValidationFlags(e);
+  return e;
+}
 
 /** Demo GGST (MIRA 205) filing calendar, mirroring the seeded Supabase org. */
 const F0 = { sales8: 0, salesZero: 0, salesExempt: 0, salesOos: 0 };
@@ -118,6 +171,7 @@ export class MemoryStore implements LedgerStore {
   readonly #sales: SaleRow[] = [];
   readonly #bills = DEMO_BILLS.map((b) => ({ ...b }));
   readonly #bankTxns = DEMO_BANK_TXNS.map((t) => ({ ...t }));
+  readonly #documents: DocumentRow[] = [];
 
   constructor(seed = true) {
     if (seed) {
@@ -404,6 +458,39 @@ export class MemoryStore implements LedgerStore {
       imported += 1;
     }
     return { importId: `import-${++this.#idSeq}`, imported, duplicates, total: clean.length };
+  }
+
+  async ingestDocument(upload: DocumentUpload): Promise<IngestResult> {
+    const { bytes } = assertUpload(upload);
+    const mimeType = mediaTypeFor(upload.contentType); // rejects unsupported types
+    const extraction = cannedExtraction(upload.filename);
+    const doc: DocumentRow = {
+      id: `doc-${++this.#idSeq}`,
+      fileName: upload.filename,
+      mimeType,
+      byteSize: bytes,
+      status: "EXTRACTED",
+      captureSource: upload.captureSource ?? "MANUAL_UPLOAD",
+      createdAt: new Date().toISOString(),
+      model: `${DEFAULT_EXTRACTION_MODEL} (demo)`,
+      extraction,
+    };
+    this.#documents.unshift(doc);
+    return {
+      documentId: doc.id,
+      fileName: doc.fileName,
+      mimeType: doc.mimeType,
+      byteSize: doc.byteSize,
+      status: doc.status,
+      model: doc.model,
+      duplicate: false,
+      extraction,
+      error: null,
+    };
+  }
+
+  async listDocuments(): Promise<DocumentRow[]> {
+    return this.#documents.map((d) => ({ ...d }));
   }
 
   async listVendors(): Promise<VendorRow[]> {

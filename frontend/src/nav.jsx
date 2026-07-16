@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { LayoutDashboard, ReceiptText, CheckCircle2, Package, Landmark, CalendarClock, Search, Bell, ChevronDown, Wallet, MoreHorizontal, Plus, Settings as SettingsIcon, Users, BarChart3 } from "lucide-react";
+import { LayoutDashboard, ReceiptText, CheckCircle2, Package, Landmark, CalendarClock, Search, Bell, ChevronDown, Wallet, MoreHorizontal, Plus, Settings as SettingsIcon, Users, BarChart3, ScanLine } from "lucide-react";
 import { T, mono } from "./theme.js";
 
 /* ---------------------------------------------------------------------------
@@ -7,6 +7,7 @@ import { T, mono } from "./theme.js";
 --------------------------------------------------------------------------- */
 const NAV = [
   { id: "dashboard", label: "Dashboard", short: "Overview", icon: LayoutDashboard },
+  { id: "inbox", label: "AI Inbox", short: "Inbox", icon: ScanLine, tag: "AI" },
   { id: "bills", label: "Bills to pay", short: "Bills", icon: ReceiptText },
   { id: "approval", label: "Approvals", short: "Approve", icon: CheckCircle2 },
   { group: "Purchases", icon: Wallet, children: [
@@ -20,7 +21,7 @@ const NAV = [
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 const PRIMARY = ["dashboard", "approval", "bills", "banking"];
-const MORE = ["inventory", "vendors", "reports", "filing", "settings", "txns"];
+const MORE = ["inbox", "inventory", "vendors", "reports", "filing", "settings", "txns"];
 
 /* ---- Light nested sidebar ------------------------------------------------ */
 export function Sidebar({ active, onNav, counts }) {
@@ -172,9 +173,9 @@ export function BottomNav({ active, onNav, counts }) {
               boxShadow: "0 -8px 30px rgba(11,42,46,0.15)" }}>
             <div style={{ width: 36, height: 4, borderRadius: 4, background: T.line,
               margin: "4px auto 12px" }} />
-            {[["inventory", Package, "Inventory"], ["vendors", Users, "Vendors"],
+            {[["inbox", ScanLine, "AI Inbox"], ["inventory", Package, "Inventory"], ["vendors", Users, "Vendors"],
               ["reports", BarChart3, "Reports"], ["filing", CalendarClock, "Tax filing"],
-              ["settings", Settings, "Settings"]].map(([id, Icon, label]) => {
+              ["settings", SettingsIcon, "Settings"]].map(([id, Icon, label]) => {
               const on = active === id;
               return (
                 <button key={id} onClick={() => { onNav(id); setMoreOpen(false); }}

@@ -14,7 +14,13 @@ export function createStore(env: NodeJS.ProcessEnv = process.env): LedgerStore {
   const key = env.SUPABASE_SERVICE_ROLE_KEY;
   const org = env.KASHIKEYO_ORG_ID;
   if (url && key && org) {
-    return new SupabaseStore({ url, key, org });
+    return new SupabaseStore({
+      url,
+      key,
+      org,
+      anthropicKey: env.ANTHROPIC_API_KEY,
+      anthropicModel: env.ANTHROPIC_MODEL,
+    });
   }
   return new MemoryStore();
 }

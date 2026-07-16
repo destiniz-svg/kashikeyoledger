@@ -54,6 +54,9 @@ export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
 export const getSettings = () => get("/settings");
 export const getTransactions = () => get("/transactions");
+export const getDocuments = () => get("/documents");
+export const uploadDocument = (filename, contentType, dataBase64, captureSource) =>
+  post("/documents", { filename, contentType, dataBase64, captureSource });
 
 async function patch(path, body) {
   const token = getToken();

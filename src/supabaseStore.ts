@@ -8,10 +8,12 @@
  * can bypass RLS as a trusted backend). The key is read from the environment —
  * never hard-coded.
  */
+import { createHash } from "node:crypto";
 import {
   StoreError,
   agingBucket,
   assertReconStatus,
+  assertUpload,
   bankTxnSigned,
   formatBillDate,
   nameInitials,
@@ -22,6 +24,9 @@ import {
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type DocumentRow,
+  type DocumentUpload,
+  type IngestResult,
   type ImportLineInput,
   type ImportResult,
   type MemberRow,
@@ -39,11 +44,35 @@ import {
   type TrialBalanceRow,
   type VendorRow,
 } from "./store.ts";
+import {
+  DEFAULT_EXTRACTION_MODEL,
+  extractDocument,
+  mediaTypeFor,
+  type Extraction,
+} from "./aiExtract.ts";
 
 export interface SupabaseConfig {
   url: string;
   key: string;
   org: string;
+  /** Anthropic API key for AI extraction; when absent, extraction is skipped. */
+  anthropicKey?: string;
+  /** Model for extraction; defaults to claude-opus-4-8. */
+  anthropicModel?: string;
+}
+
+/** The document storage bucket (created by the phase2 migration). */
+const DOC_BUCKET = "documents";
+
+interface DbDocument {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  byte_size: string | number;
+  status: string;
+  capture_source: string;
+  created_at: string;
+  ai_extractions?: { model: string; raw_output: unknown }[] | null;
 }
 
 interface DbAccount {
@@ -129,12 +158,16 @@ export class SupabaseStore implements LedgerStore {
   readonly org: string;
   readonly #url: string;
   readonly #key: string;
+  readonly #anthropicKey: string;
+  readonly #anthropicModel: string;
   readonly #authCache = new Map<string, number>();
 
   constructor(config: SupabaseConfig) {
     this.#url = config.url.replace(/\/+$/, "");
     this.#key = config.key;
     this.org = config.org;
+    this.#anthropicKey = config.anthropicKey ?? "";
+    this.#anthropicModel = config.anthropicModel || DEFAULT_EXTRACTION_MODEL;
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -688,6 +721,160 @@ export class SupabaseStore implements LedgerStore {
       const email = r.profiles?.email ?? "";
       return { name, email, role: r.role, ini: nameInitials(name, email) };
     });
+  }
+
+  /** Upload raw bytes to the private `documents` bucket at `path`. */
+  async #uploadObject(path: string, bytes: Buffer, contentType: string): Promise<void> {
+    const res = await fetch(
+      `${this.#url}/storage/v1/object/${DOC_BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`,
+      {
+        method: "POST",
+        headers: {
+          apikey: this.#key,
+          authorization: `Bearer ${this.#key}`,
+          "content-type": contentType,
+          "x-upsert": "true",
+        },
+        body: bytes,
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new StoreError(`Document storage upload failed: ${text || res.status}`, 502);
+    }
+  }
+
+  /** Shape a documents row (+ embedded extraction) into a DocumentRow. */
+  #toDocumentRow(r: DbDocument): DocumentRow {
+    const ex = (r.ai_extractions ?? [])[0];
+    return {
+      id: r.id,
+      fileName: r.file_name,
+      mimeType: r.mime_type,
+      byteSize: Number(r.byte_size),
+      status: r.status,
+      captureSource: r.capture_source,
+      createdAt: r.created_at,
+      model: ex?.model ?? null,
+      extraction: ex ? (ex.raw_output as Extraction) : null,
+    };
+  }
+
+  async ingestDocument(upload: DocumentUpload): Promise<IngestResult> {
+    const { bytes: byteSize } = assertUpload(upload);
+    const mimeType = mediaTypeFor(upload.contentType);
+    const bytes = Buffer.from(upload.dataBase64, "base64");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+
+    // Dedupe: the same file re-uploaded returns its existing extraction — no
+    // second (billable) call to Claude.
+    const existing = (await this.#request(
+      `/rest/v1/documents?organization_id=eq.${this.org}&sha256=eq.${sha256}` +
+        `&select=id,file_name,mime_type,byte_size,status,capture_source,created_at,` +
+        `ai_extractions(model,raw_output)&order=created_at.desc&limit=1`,
+    )) as DbDocument[];
+    if (existing[0]) {
+      const doc = this.#toDocumentRow(existing[0]);
+      return {
+        documentId: doc.id,
+        fileName: doc.fileName,
+        mimeType: doc.mimeType,
+        byteSize: doc.byteSize,
+        status: doc.status,
+        model: doc.model,
+        duplicate: true,
+        extraction: doc.extraction,
+        error: doc.extraction ? null : "Previously uploaded; no extraction on file",
+      };
+    }
+
+    const storagePath = `${this.org}/${sha256}`;
+    await this.#uploadObject(storagePath, bytes, mimeType);
+
+    const inserted = (await this.#request("/rest/v1/documents", {
+      method: "POST",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        organization_id: this.org,
+        storage_path: storagePath,
+        file_name: upload.filename,
+        mime_type: mimeType,
+        byte_size: byteSize,
+        sha256,
+        status: "UPLOADED",
+        capture_source: upload.captureSource ?? "MANUAL_UPLOAD",
+      }),
+    })) as { id: string }[];
+    const documentId = inserted[0]?.id;
+    if (!documentId) throw new StoreError("Document row was not created", 500);
+
+    const base: Omit<IngestResult, "status" | "extraction" | "error" | "model"> = {
+      documentId,
+      fileName: upload.filename,
+      mimeType,
+      byteSize,
+      duplicate: false,
+    };
+
+    // No key configured: keep the file, skip extraction, tell the caller why.
+    if (!this.#anthropicKey) {
+      return {
+        ...base,
+        status: "UPLOADED",
+        model: null,
+        extraction: null,
+        error: "AI extraction is not configured (set ANTHROPIC_API_KEY)",
+      };
+    }
+
+    try {
+      await this.#setDocumentStatus(documentId, "EXTRACTING");
+      const extraction = await extractDocument({
+        apiKey: this.#anthropicKey,
+        model: this.#anthropicModel,
+        base64: upload.dataBase64,
+        contentType: mimeType,
+        filename: upload.filename,
+      });
+      await this.#request("/rest/v1/ai_extractions", {
+        method: "POST",
+        body: JSON.stringify({
+          document_id: documentId,
+          organization_id: this.org,
+          model: this.#anthropicModel,
+          raw_output: extraction,
+          field_confidence: extraction.fieldConfidence,
+          validation_flags: extraction.validationFlags,
+        }),
+      });
+      await this.#setDocumentStatus(documentId, "EXTRACTED");
+      return { ...base, status: "EXTRACTED", model: this.#anthropicModel, extraction, error: null };
+    } catch (err) {
+      await this.#setDocumentStatus(documentId, "EXTRACTION_FAILED").catch(() => {});
+      return {
+        ...base,
+        status: "EXTRACTION_FAILED",
+        model: this.#anthropicModel,
+        extraction: null,
+        error: err instanceof Error ? err.message : "Extraction failed",
+      };
+    }
+  }
+
+  async #setDocumentStatus(id: string, status: string): Promise<void> {
+    await this.#request(`/rest/v1/documents?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async listDocuments(): Promise<DocumentRow[]> {
+    const rows = (await this.#request(
+      `/rest/v1/documents?organization_id=eq.${this.org}` +
+        `&select=id,file_name,mime_type,byte_size,status,capture_source,created_at,` +
+        `ai_extractions(model,raw_output)&order=created_at.desc`,
+    )) as DbDocument[];
+    return rows.map((r) => this.#toDocumentRow(r));
   }
 
   async verifyMember(token: string): Promise<boolean> {
