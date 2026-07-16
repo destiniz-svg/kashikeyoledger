@@ -19,7 +19,8 @@ const ANTHROPIC_VERSION = "2023-06-01";
 export const DEFAULT_EXTRACTION_MODEL = "claude-opus-4-8";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+// A rolling alias so we don't pin a version Google later retires for new keys.
+export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
 
 /** Upload MIME types Claude can read directly (images + PDF). */
 export const ALLOWED_UPLOAD_MIME = [
@@ -518,7 +519,63 @@ export function parseGeminiResponse(body: unknown): Extraction {
   return e;
 }
 
-/** Read a document with Gemini and return the structured extraction. */
+/** One generateContent call. Returns the parsed body and whether it succeeded. */
+async function geminiGenerate(
+  apiKey: string, model: string, base64: string, mediaType: string,
+  filename: string | undefined, doFetch: FetchLike,
+): Promise<{ ok: boolean; status: number; body: unknown }> {
+  const res = await doFetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify(buildGeminiRequest({ base64, mediaType, filename })),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text };
+  }
+  return { ok: res.ok, status: res.status, body };
+}
+
+/** True when a failure means the model name is retired / unavailable, not a real error. */
+function isModelUnavailable(r: { status: number; body: unknown }): boolean {
+  if (r.status === 404) return true;
+  const msg = JSON.stringify(r.body ?? "").toLowerCase();
+  return /no longer available|not found|is not supported|not available|update your code|unsupported model/.test(msg);
+}
+
+/**
+ * Ask Google which models this key can use, and pick one that supports
+ * generateContent — preferring a (non-lite) flash model for speed/cost.
+ */
+export async function pickGeminiModel(apiKey: string, doFetch: FetchLike): Promise<string | null> {
+  const res = await doFetch(`${GEMINI_BASE}?pageSize=1000`, {
+    method: "GET",
+    headers: { "x-goog-api-key": apiKey },
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    models?: { name?: string; supportedGenerationMethods?: string[] }[];
+  };
+  const usable = (body.models ?? [])
+    .filter((m) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
+    .map((m) => String(m.name ?? "").replace(/^models\//, ""))
+    .filter(Boolean);
+  return (
+    usable.find((n) => n.includes("flash") && !n.includes("lite")) ??
+    usable.find((n) => n.includes("flash")) ??
+    usable.find((n) => n.includes("pro")) ??
+    usable[0] ??
+    null
+  );
+}
+
+/**
+ * Read a document with Gemini and return the structured extraction. If the
+ * configured model has been retired for this key, discover an available model
+ * once and retry — so a Google model rename doesn't break ingestion.
+ */
 export async function extractDocumentGemini(opts: {
   apiKey: string;
   model?: string;
@@ -532,25 +589,21 @@ export async function extractDocumentGemini(opts: {
   const model = opts.model || DEFAULT_GEMINI_MODEL;
   const mediaType = mediaTypeFor(contentType);
   const doFetch = opts.fetchImpl ?? (globalThis.fetch as FetchLike);
-  const res = await doFetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
-    body: JSON.stringify(buildGeminiRequest({ base64, mediaType, filename })),
-  });
-  const text = await res.text();
-  let body: unknown;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    body = { raw: text };
+
+  let r = await geminiGenerate(apiKey, model, base64, mediaType, filename, doFetch);
+  if (!r.ok && isModelUnavailable(r)) {
+    const alt = await pickGeminiModel(apiKey, doFetch).catch(() => null);
+    if (alt && alt !== model) {
+      r = await geminiGenerate(apiKey, alt, base64, mediaType, filename, doFetch);
+    }
   }
-  if (!res.ok) {
+  if (!r.ok) {
     const msg =
-      (body as { error?: { message?: string } })?.error?.message ??
-      `Gemini request failed (${res.status})`;
+      (r.body as { error?: { message?: string } })?.error?.message ??
+      `Gemini request failed (${r.status})`;
     throw new Error(String(msg));
   }
-  return parseGeminiResponse(body);
+  return parseGeminiResponse(r.body);
 }
 
 /** Config for picking a provider: Anthropic first, else Gemini. */

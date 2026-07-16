@@ -303,6 +303,31 @@ test("extractDocumentGemini surfaces an API error", async () => {
   );
 });
 
+test("extractDocumentGemini rediscovers a model when the configured one is retired", async () => {
+  const calls: string[] = [];
+  const fakeFetch = async (url: string, init: RequestInit) => {
+    calls.push(`${init.method} ${url}`);
+    // 1) generateContent on the retired model → unavailable error
+    if (url.includes("gemini-flash-latest:generateContent")) {
+      return new Response(JSON.stringify({ error: { message: "models/gemini-flash-latest is no longer available to new users" } }), { status: 400 });
+    }
+    // 2) ListModels → offer a working model
+    if (init.method === "GET" && url.includes("/models?")) {
+      return new Response(JSON.stringify({ models: [
+        { name: "models/gemini-9-flash", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/embedding-001", supportedGenerationMethods: ["embedContent"] },
+      ] }), { status: 200 });
+    }
+    // 3) retry generateContent on the discovered model → success
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+      document_type: "INVOICE", currency: "MVR", line_items: [],
+      predicted_tax_category: "GGST", confidence_score: 0.9, ai_reasoning: "ok" }) }] } }] }), { status: 200 });
+  };
+  const e = await extractDocumentGemini({ apiKey: "g", base64: "A", contentType: "image/png", fetchImpl: fakeFetch });
+  assert.equal(e.documentType, "INVOICE");
+  assert.ok(calls.some((c) => c.includes("gemini-9-flash:generateContent")), "should retry on the discovered model");
+});
+
 test("hasProvider is true only when a key is set", () => {
   assert.equal(hasProvider({}), false);
   assert.equal(hasProvider({ anthropicKey: "x" }), true);

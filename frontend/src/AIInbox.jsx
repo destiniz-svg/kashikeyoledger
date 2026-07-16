@@ -394,8 +394,11 @@ export function AIInbox({ session, onRequireLogin }) {
           const b64 = await readAsBase64(f);
           const res = await uploadDocument(f.name, f.type, b64);
           await load();
-          if (res?.error) setNote(res.error);
+          // A stored-but-not-extracted result carries an error note (e.g. no AI
+          // key, or a model/provider problem) — surface it as a warning.
+          if (res?.error) setErr(res.error);
           else if (res?.duplicate) setNote(`"${f.name}" was already uploaded — showing the saved extraction.`);
+          else setNote(`Extracted "${f.name}".`);
         } else {
           // Offline: show what an upload would produce, nothing persists.
           setNote("Sample mode — sign in to store the file and run a live extraction.");
