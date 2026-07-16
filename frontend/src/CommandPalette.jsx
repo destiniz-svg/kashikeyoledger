@@ -6,19 +6,19 @@ import { T, mono, sans } from "./theme.js";
 
 // Every destination + quick action, one keystroke away.
 const COMMANDS = [
-  { id: "dashboard", label: "Dashboard", hint: "Spend overview", icon: LayoutDashboard, kind: "nav", keys: "overview home" },
-  { id: "inbox", label: "AI Inbox", hint: "Upload & extract documents", icon: ScanLine, kind: "nav", keys: "ai scan receipt invoice upload" },
-  { id: "bills", label: "Bills to pay", hint: "Purchases & expenses", icon: ReceiptText, kind: "nav", keys: "purchases expenses payable" },
+  { id: "dashboard", label: "Home", hint: "Your business at a glance", icon: LayoutDashboard, kind: "nav", keys: "overview dashboard spend" },
+  { id: "inbox", label: "Scan & Upload", hint: "Read receipts & invoices with AI", icon: ScanLine, kind: "nav", keys: "ai inbox receipt invoice upload document" },
+  { id: "bills", label: "Bills to pay", hint: "What you owe", icon: ReceiptText, kind: "nav", keys: "purchases expenses payable owe" },
   { id: "approval", label: "Approvals", hint: "Approve or reject bills", icon: CheckCircle2, kind: "nav", keys: "queue verify" },
-  { id: "vendors", label: "Vendors", hint: "Suppliers & spend", icon: Users, kind: "nav", keys: "suppliers" },
-  { id: "inventory", label: "Inventory", hint: "Stock on hand", icon: Package, kind: "nav", keys: "stock items" },
-  { id: "txns", label: "All transactions", hint: "Unified ledger log", icon: ArrowLeftRight, kind: "nav", keys: "history log" },
-  { id: "banking", label: "Banking", hint: "Reconcile statements", icon: Landmark, kind: "nav", keys: "bank reconcile statement" },
-  { id: "reports", label: "Reports", hint: "Analytics & aging", icon: BarChart3, kind: "nav", keys: "analytics aging" },
-  { id: "filing", label: "Tax filing", hint: "MIRA 205 & 206", icon: CalendarClock, kind: "nav", keys: "gst tgst mira return" },
-  { id: "settings", label: "Settings", hint: "Organization & tax", icon: SettingsIcon, kind: "nav", keys: "profile config" },
-  { id: "act-upload", label: "Upload a document", hint: "Receipt, invoice or bank slip", icon: UploadCloud, kind: "action", to: "inbox", keys: "new add scan" },
-  { id: "act-import", label: "Import bank statement", hint: "Reconcile a CSV", icon: Landmark, kind: "action", to: "banking", keys: "new csv" },
+  { id: "banking", label: "Banking", hint: "Match your bank statement", icon: Landmark, kind: "nav", keys: "bank reconcile statement" },
+  { id: "vendors", label: "Suppliers", hint: "Who you buy from", icon: Users, kind: "nav", keys: "vendors" },
+  { id: "inventory", label: "Stock", hint: "What's on hand", icon: Package, kind: "nav", keys: "inventory items" },
+  { id: "txns", label: "Activity", hint: "Everything that happened", icon: ArrowLeftRight, kind: "nav", keys: "transactions history log" },
+  { id: "reports", label: "Reports", hint: "Charts & insights", icon: BarChart3, kind: "nav", keys: "analytics aging" },
+  { id: "filing", label: "Taxes", hint: "Your GST returns", icon: CalendarClock, kind: "nav", keys: "gst tgst mira filing return" },
+  { id: "settings", label: "Settings", hint: "Business & tax details", icon: SettingsIcon, kind: "nav", keys: "profile config account" },
+  { id: "act-upload", label: "Scan a document", hint: "Receipt, invoice or bank slip", icon: UploadCloud, kind: "action", to: "inbox", keys: "new add upload" },
+  { id: "act-import", label: "Import bank statement", hint: "Match a CSV", icon: Landmark, kind: "action", to: "banking", keys: "new csv" },
 ];
 
 export function CommandPalette({ open, onClose, onNav, auth }) {

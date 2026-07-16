@@ -22,11 +22,11 @@ const FEATURES = [
     "Every entry is double-entry and balance-checked in the database, with an immutable audit trail for the Tax Administration Act."],
 ];
 
-const CHIPS = ["MVR-native", "MIRA 205 / 206", "Double-entry", "Audit-ready"];
+const CHIPS = ["In Rufiyaa", "GST returns ready", "Always balanced", "Made for Maldives"];
 const STATS = [
-  ["8%", "GGST handled"],
-  ["17%", "TGST handled"],
-  ["2", "AI providers"],
+  ["Snap", "a photo to log a bill"],
+  ["Auto", "GST returns"],
+  ["MVR + USD", "side by side"],
   ["0", "spreadsheets"],
 ];
 const FLOW = [
@@ -176,7 +176,8 @@ export function Landing({ onSignIn, onEnter }) {
           <div className="mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3" style={{ maxWidth: 1120 }}>
             {STATS.map(([v, l], i) => (
               <div key={l} className="rounded-2xl p-5 text-center k-lift" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-                <div style={{ ...num, fontSize: 30, fontWeight: 780, color: T.ink, letterSpacing: "-0.02em" }}>{v}</div>
+                <div style={{ ...num, fontSize: "clamp(17px, 4.5vw, 26px)", fontWeight: 780, color: T.ink,
+                  letterSpacing: "-0.02em", whiteSpace: "nowrap" }}>{v}</div>
                 <div style={{ fontFamily: mono, fontSize: 10.5, letterSpacing: "0.06em", textTransform: "uppercase",
                   color: T.faint, marginTop: 4 }}>{l}</div>
               </div>

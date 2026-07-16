@@ -82,9 +82,9 @@ class ScreenBoundary extends React.Component {
 }
 
 const TITLES = {
-  dashboard: "Spend Overview", approval: "Approval queue", bills: "Bills & expenses",
-  inventory: "Inventory", banking: "Banking", filing: "Tax filing", vendors: "Vendors",
-  reports: "Reports", txns: "All transactions", settings: "Settings", inbox: "AI Inbox",
+  dashboard: "Home", approval: "Approvals", bills: "Bills to pay",
+  inventory: "Stock", banking: "Banking", filing: "Taxes", vendors: "Suppliers",
+  reports: "Reports", txns: "Activity", settings: "Settings", inbox: "Scan & Upload",
 };
 export default function App() {
   const [active, setActive] = useState("dashboard");
@@ -138,13 +138,13 @@ export default function App() {
       `}</style>
       <Sidebar active={active} onNav={nav} counts={counts} onOpenPalette={() => setPaletteOpen(true)} auth={auth} />
       <main className="flex-1 min-w-0 flex flex-col">
-        <MobileHeader title={title} onOpenPalette={() => setPaletteOpen(true)} onNav={nav} notif={notif} />
+        <MobileHeader title={title} onOpenPalette={() => setPaletteOpen(true)} onNav={nav} notif={notif} auth={auth} />
         <Topbar title={title} auth={auth} onOpenPalette={() => setPaletteOpen(true)} onNav={nav} notif={notif} />
         <div className="flex-1" style={{ paddingBottom: 64 }} key={session ? "auth" : "anon"}>
           <ScreenBoundary screen={active}>
           <Suspense fallback={<ScreenFallback />}>
             <div key={active} className="k-in-fade">
-            {active === "dashboard" && <Dashboard onNav={nav} />}
+            {active === "dashboard" && <Dashboard onNav={nav} session={session} />}
             {active === "approval" && <Approval session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "bills" && <Bills onNav={nav} />}
             {active === "vendors" && <Vendors />}
@@ -161,7 +161,7 @@ export default function App() {
           </ScreenBoundary>
         </div>
       </main>
-      <BottomNav active={active} onNav={nav} counts={counts} />
+      <BottomNav active={active} onNav={nav} counts={counts} auth={auth} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNav={nav} auth={auth} />
       {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />}
     </div>
