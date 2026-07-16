@@ -6,6 +6,7 @@ import { getDashboard, getCompliance, getInventory, API_BASE } from "./api.js";
 import { T, mono, num, fmt, fmt0, dec2 } from "./theme.js";
 import { TREND, BY_CATEGORY, BY_VENDOR, BY_TAX, CAT_COLORS, TAX_COLORS } from "./data.js";
 import { Eyebrow, BreakdownList } from "./ui.jsx";
+import { greeting, displayName } from "./user.js";
 
 // USD from MVR, for the dual-currency labels.
 const usd = (n) => `$ ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -43,16 +44,16 @@ const CHECK_NAV = { vendor_tin: "bills", doc_review: "inbox", bank_recon: "banki
 // Which base-currency figures to show in the dual-currency header.
 const DUAL_FIELDS = [
   ["Cash & bank", "cashAndBank"],
-  ["Expenses", "expenses"],
-  ["Accounts payable", "accountsPayable"],
-  ["Claimable input tax", "claimableInputTax"],
+  ["Spending", "expenses"],
+  ["Money you owe", "accountsPayable"],
+  ["Tax to reclaim", "claimableInputTax"],
 ];
 
 function DualCurrencyHeader({ c }) {
   return (
     <div className="rounded-2xl p-4 sm:p-5 mb-4" style={{ background: T.ink }}>
       <div className="flex items-center gap-2 mb-3.5 flex-wrap">
-        <Eyebrow style={{ color: "rgba(255,255,255,0.66)" }}>Position · base MVR</Eyebrow>
+        <Eyebrow style={{ color: "rgba(255,255,255,0.66)" }}>Your money · in Rufiyaa</Eyebrow>
         <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
           color: T.gold, background: "rgba(184,137,43,0.16)", borderRadius: 999, padding: "2px 8px" }}>
           USD @ {c.fx.mvrPerUsd.toFixed(2)}</span>
@@ -185,19 +186,20 @@ function LiveLedgerStrip({ state }) {
     );
   }
   const d = state.data;
+  const balanced = Math.abs(d.outOfBalanceBy) < 0.01;
   const tiles = [
-    ["Accounts payable", fmt(d.accountsPayable)],
+    ["Money you owe", fmt(d.accountsPayable)],
     ["Cash & bank", fmt(d.cashAndBank)],
-    ["Expenses", fmt(d.expenses)],
-    ["Revenue (MTD)", fmt(d.revenueThisMonth.grandTotal)],
-    ["Out of balance", fmt(d.outOfBalanceBy)],
+    ["Spending", fmt(d.expenses)],
+    ["Sales this month", fmt(d.revenueThisMonth.grandTotal)],
+    ["Books", balanced ? "Balanced ✓" : fmt(d.outOfBalanceBy)],
   ];
   return (
     <div className="rounded-2xl p-4 sm:p-5 mb-4" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
       <div className="flex items-center gap-2 mb-3.5">
         <span style={{ width: 8, height: 8, borderRadius: 999, background: T.claim,
           boxShadow: `0 0 0 3px ${T.claimSoft}` }} />
-        <Eyebrow style={{ color: T.claim }}>Live from your ledger</Eyebrow>
+        <Eyebrow style={{ color: T.claim }}>Live from your books</Eyebrow>
         <span style={{ fontFamily: mono, fontSize: 10.5, color: T.faint, marginLeft: "auto" }}>
           {d.revenueThisMonth.from} – {d.revenueThisMonth.to}</span>
       </div>
@@ -216,7 +218,33 @@ function LiveLedgerStrip({ state }) {
 
 const PERIODS = [["all", "All"], ["6m", "6M"], ["3m", "3M"]];
 
-export function Dashboard({ onNav }) {
+function WelcomeHeader({ session, comp, onNav }) {
+  const name = session ? displayName(session) : null;
+  const needs = (comp?.checks || []).filter((c) => c.status !== "ok").length;
+  return (
+    <div className="mb-4 k-in">
+      <div style={{ fontSize: "clamp(20px, 3.4vw, 26px)", fontWeight: 750, color: T.text, letterSpacing: "-0.02em" }}>
+        {greeting()}{name ? `, ${name}` : ""} <span style={{ WebkitTextFillColor: "initial" }}>👋</span>
+      </div>
+      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+        {needs > 0 ? (
+          <button onClick={() => onNav("approval")} className="focus:outline-none k-press"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.goldSoft, color: T.warn,
+              borderRadius: 999, padding: "5px 12px", fontSize: 12.5, fontWeight: 600 }}>
+            {needs} thing{needs === 1 ? "" : "s"} need your attention →</button>
+        ) : (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.claimSoft, color: T.claim,
+            borderRadius: 999, padding: "5px 12px", fontSize: 12.5, fontWeight: 600 }}>You're all caught up 🎉</span>
+        )}
+        {!session && (
+          <span style={{ fontSize: 12.5, color: T.muted }}>You're exploring the demo — sign in to go live.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function Dashboard({ onNav, session }) {
   const [state, setState] = useState({ status: "loading", data: null });
   const [compliance, setCompliance] = useState(null);
   const [invValue, setInvValue] = useState(null);
@@ -257,19 +285,20 @@ export function Dashboard({ onNav }) {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
+      <WelcomeHeader session={session} comp={comp} onNav={onNav} />
       <LiveLedgerStrip state={state} />
       <DualCurrencyHeader c={comp} />
       {/* stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 k-stagger">
-        <div style={{ "--k-i": 0 }}><StatCard label="Accounts payable" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
-          sub={`${billCount} bills`} action="Review" onAction={() => onNav("bills")} /></div>
-        <div style={{ "--k-i": 1 }}><StatCard label="Awaiting approval" value={live ? String(d.pendingApprovals) : "3"}
-          sub="draft or AI-verified" accent={T.teal} action="Open" onAction={() => onNav("approval")} /></div>
-        <div style={{ "--k-i": 2 }}><StatCard label="Claimable input tax" value={live ? dec2(d.claimableInputTax) : "8,107.00"} cur="MVR"
-          sub="toward MIRA 205" accent={T.claim} /></div>
-        <div style={{ "--k-i": 3 }}><StatCard label="Inventory value"
+        <div style={{ "--k-i": 0 }}><StatCard label="Money you owe" value={live ? dec2(d.accountsPayable) : "45,230.00"} cur="MVR"
+          sub={`${billCount} unpaid bills`} action="Review" onAction={() => onNav("bills")} /></div>
+        <div style={{ "--k-i": 1 }}><StatCard label="Waiting for you" value={live ? String(d.pendingApprovals) : "3"}
+          sub="bills to approve" accent={T.teal} action="Open" onAction={() => onNav("approval")} /></div>
+        <div style={{ "--k-i": 2 }}><StatCard label="Tax to reclaim" value={live ? dec2(d.claimableInputTax) : "8,107.00"} cur="MVR"
+          sub="on your next return" accent={T.claim} /></div>
+        <div style={{ "--k-i": 3 }}><StatCard label="Stock value"
           value={invValue != null ? dec2(invValue) : (live ? "—" : "312,400")} cur="MVR"
-          sub="weighted average cost" action="View" onAction={() => onNav("inventory")} /></div>
+          sub="what's on hand" action="View" onAction={() => onNav("inventory")} /></div>
       </div>
 
       {/* MIRA compliance widget */}

@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { Bell, Plus, CheckCircle2, Landmark, ScanLine, CalendarClock, AlertTriangle,
-  UploadCloud, ArrowRight, Check } from "lucide-react";
+  UploadCloud, ArrowRight, Check, LogOut, LogIn, Settings as SettingsIcon, User } from "lucide-react";
 import { T, mono } from "./theme.js";
 import { useDismiss } from "./motion.js";
+import { displayName, initials } from "./user.js";
 
 const NOTIF_ICON = { check: CheckCircle2, bank: Landmark, scan: ScanLine, calendar: CalendarClock, alert: AlertTriangle };
 const TONE = {
@@ -75,8 +76,56 @@ export function NotificationBell({ notifications = [], unread = 0, onMarkRead, o
   );
 }
 
+/** Avatar → account menu (name, email, settings, sign out). Sign-in when out. */
+export function AccountMenu({ auth, onNav, mobile }) {
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss(open, () => setOpen(false));
+  const session = auth?.session;
+
+  if (!session) {
+    return (
+      <button onClick={auth?.onSignIn} className="focus:outline-none k-press"
+        style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${T.line}`,
+          borderRadius: 10, padding: mobile ? "7px 12px" : "8px 14px", fontSize: 12.5, fontWeight: 600, color: T.teal }}>
+        <LogIn size={15} /> Sign in</button>
+    );
+  }
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} aria-label="Account" className="focus:outline-none k-press"
+        style={{ width: mobile ? 34 : 36, height: mobile ? 34 : 36, borderRadius: 999, background: T.tealSoft,
+          color: T.teal, display: "grid", placeItems: "center", fontFamily: mono, fontSize: 12, fontWeight: 800,
+          border: `1px solid ${open ? T.teal : "transparent"}` }}>{initials(session)}</button>
+      {open && (
+        <div className="k-in-scale" style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 240,
+          background: T.surface, border: `1px solid ${T.line}`, borderRadius: 14, zIndex: 70,
+          boxShadow: "0 24px 60px -28px rgba(11,42,46,0.5)", overflow: "hidden", transformOrigin: "top right" }}>
+          <div className="flex items-center gap-3 px-4 py-3.5" style={{ borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ width: 38, height: 38, borderRadius: 999, background: T.tealSoft, color: T.teal,
+              display: "grid", placeItems: "center", fontFamily: mono, fontSize: 13, fontWeight: 800 }}>{initials(session)}</div>
+            <div className="min-w-0">
+              <div style={{ fontSize: 13.5, fontWeight: 680, color: T.text }}>{displayName(session)}</div>
+              <div style={{ fontSize: 11, color: T.faint, overflow: "hidden", textOverflow: "ellipsis",
+                whiteSpace: "nowrap" }}>{session.user?.email}</div>
+            </div>
+          </div>
+          <button onClick={() => { setOpen(false); onNav?.("settings"); }}
+            className="w-full flex items-center gap-3 text-left focus:outline-none"
+            style={{ padding: "11px 16px", cursor: "pointer", fontSize: 13, color: T.text }}>
+            <SettingsIcon size={15} color={T.muted} /> Settings</button>
+          <button onClick={() => { setOpen(false); auth.onSignOut(); }}
+            className="w-full flex items-center gap-3 text-left focus:outline-none"
+            style={{ padding: "11px 16px", cursor: "pointer", fontSize: 13, color: T.exempt,
+              borderTop: `1px solid ${T.line2}` }}>
+            <LogOut size={15} /> Sign out</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const QUICK = [
-  { id: "inbox", label: "Upload a document", hint: "Receipt, invoice, bank slip", icon: UploadCloud },
+  { id: "inbox", label: "Scan a document", hint: "Receipt, invoice, bank slip", icon: UploadCloud },
   { id: "banking", label: "Import bank statement", hint: "Reconcile a CSV", icon: Landmark },
   { id: "approval", label: "Review approvals", hint: "Approve pending bills", icon: CheckCircle2 },
 ];
