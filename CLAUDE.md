@@ -79,6 +79,29 @@ node --test test/ledger.test.ts
   `import { createStore } from "./createStore.ts"`.
 - The service-role key is a secret: read from env only, never commit it.
 
+## Multi-jurisdiction & compliance (Phase 1)
+
+The DB is multi-tenant (org-scoped) and now multi-**jurisdiction**, so country
+tax logic stays isolated and replicable (see
+[`supabase/phase1_multijurisdiction.sql`](supabase/phase1_multijurisdiction.sql)):
+
+- **`jurisdictions`** (Maldives seeded); `organizations.jurisdiction_id` and
+  `tax_rates.jurisdiction_id` scope tax to a country.
+- **GST/TGST** live in `tax_rates` (effective-dated: GGST 8%, TGST 16%→17% from
+  2025-07-01). **Green Tax** and **Withholding** are non-GST and live in
+  `other_tax_rates` — never add them to the `tax_category` enum (keeps MIRA
+  205/206 clean).
+- **Immutable audit** (Tax Administration Act s.27): `fn_audit()` triggers log
+  every insert/update/delete on the financial tables into `audit_log` with
+  before/after state; `audit_log` is append-only. The app must set the acting
+  identity per request via session GUCs — `set_config('app.actor_id', <uuid>,
+  true)`, `'app.actor_type'` (`user`/`ai_agent`/`system`), `'app.actor_ip'` —
+  so writes are attributed (falls back to the JWT subject, else `system`).
+- **Dual currency**: every `transactions`/`payments` row carries `currency` +
+  `fx_rate_to_base` (base = the org's `base_currency`, MVR). A trigger forces
+  base = 1:1 and requires a real rate for foreign currency; `grand_total_base`,
+  `tax_total_base`, `amount_base` are generated MVR amounts.
+
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`
