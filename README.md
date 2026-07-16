@@ -49,7 +49,8 @@ npm run typecheck   # tsc --noEmit (needs `npm install` for the typescript dev d
 | Method & path        | Description                                                    |
 | -------------------- | ------------------------------------------------------------- |
 | `GET /health`        | Health check (used by the deploy platform); reports `backend` |
-| `GET /`              | Service info, endpoint list, and `outOfBalanceBy`             |
+| `GET /`              | The web app (falls back to `index.html` for SPA routes); when no build is present, unmatched GETs return JSON `404` |
+| `GET /api`           | Service info, endpoint list, and `outOfBalanceBy`             |
 | `GET /accounts`      | List the chart of accounts                                    |
 | `POST /accounts` 🔒  | Create an account `{ code, name, accountType }` (requires API key) |
 | `GET /entries`       | List journal entries with their lines                         |
@@ -214,10 +215,13 @@ See [`src/demo.ts`](src/demo.ts) for a fuller worked example.
 
 ## Deploying to Railway
 
-This repo is Railway-ready. [`railway.json`](railway.json) sets the start
-command (`npm start`), a `/health` health check, and pins Node via
-[`.node-version`](.node-version). Because there is no build step and no runtime
-dependencies, Railway just installs and starts the service.
+This repo is Railway-ready, and **one service hosts both the API and the web
+app**. [`railway.json`](railway.json) builds the frontend
+(`cd frontend && npm ci && npm run build`), starts the API (`npm start`), sets a
+`/health` health check, and pins Node via [`.node-version`](.node-version). The
+API server has no runtime dependencies; it serves the built `frontend/dist` from
+`node:fs` (static assets by path, SPA fallback to `index.html`, service-info JSON
+at `/api`).
 
 1. Push this repo to GitHub (already the case).
 2. In Railway: **New Project → Deploy from GitHub repo**, and pick this repo /
@@ -227,11 +231,20 @@ dependencies, Railway just installs and starts the service.
    - `SUPABASE_SERVICE_ROLE_KEY` — your service-role key (secret)
    - `KASHIKEYO_ORG_ID` — the organization id to operate on
    - `KASHIKEYO_API_KEY` — API key for write requests (secret)
+   - `KASHIKEYO_READ_API_KEY` — optional read-only key
+   - **Frontend build-time vars** (baked into the app during the build):
+     - `VITE_SUPABASE_URL` — same as `SUPABASE_URL`
+     - `VITE_SUPABASE_ANON_KEY` — the Supabase **anon/publishable** key (not the
+       service-role key)
+     - `VITE_API_KEY` — the read key, so the dashboard can load before sign-in
+     - `VITE_API_BASE_URL` — optional; leave unset to call the API on the same
+       origin
    (`PORT` is injected by Railway automatically.)
-4. Railway builds with Railpack, then runs `npm start` and binds `0.0.0.0:$PORT`.
-5. Under **Settings → Networking**, click **Generate Domain**, then check
-   `https://<domain>/health` (should report `"backend":"supabase"`) and
-   `https://<domain>/trial-balance`.
+4. Railway builds with Railpack (frontend build first), then runs `npm start` and
+   binds `0.0.0.0:$PORT`.
+5. Under **Settings → Networking**, click **Generate Domain**, then open
+   `https://<domain>/` (the web app), and check `https://<domain>/health`
+   (should report `"backend":"supabase"`).
 
 Without the Supabase variables the service still boots on the in-memory backend
 (`"backend":"memory"`), useful for a first smoke test.

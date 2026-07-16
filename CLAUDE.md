@@ -43,9 +43,19 @@ npm run typecheck  # tsc --noEmit (requires `npm install` first for the typescri
 
 ## Deployment
 
-Deployed on Railway from the git repo. `railway.json` defines the start command
-(`npm start`) and `/health` health check; `.node-version` pins Node 22. The
-server (`src/server.ts`) must always bind `0.0.0.0` on `process.env.PORT`.
+Deployed on Railway from the git repo — **one service hosts both the API and the
+web app**. `railway.json` builds the frontend (`cd frontend && npm ci && npm run
+build`) and starts the API (`npm start`); `/health` is the health check and
+`.node-version` pins Node 22. The server (`src/server.ts`) must always bind
+`0.0.0.0` on `process.env.PORT`.
+
+`src/server.ts` also serves the built frontend from `frontend/dist` when present:
+static assets by path (hashed assets cached immutably), an SPA fallback to
+`index.html` for non-API GETs, and the service-info JSON moved from `/` to
+`/api`. This is done with `node:fs` only — still no runtime dependencies. The
+frontend's build-time env vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
+`VITE_API_KEY`, optional `VITE_API_BASE_URL`) must be set as Railway service
+variables so they're baked in during the build. (Netlify is no longer used.)
 
 Run a single test file directly:
 

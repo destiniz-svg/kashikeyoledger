@@ -6,6 +6,8 @@
  * Listens on `process.env.PORT` (Railway sets this), defaulting to 3000.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, normalize, sep } from "node:path";
 import { authorizeRead, authorizeWrite, extractApiKey } from "./auth.ts";
 import { createStore } from "./createStore.ts";
 import { StoreError, formatBillDate, type EntryInput, type SaleInput } from "./store.ts";
@@ -104,6 +106,70 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw);
 }
 
+// ---------------------------------------------------------------------------
+// Static frontend hosting. When the built web app is present (frontend/dist),
+// the same server serves it: assets by path, and an SPA fallback to index.html
+// for anything that isn't an API route. This lets one Railway service host both
+// the API and the UI on one origin (no CORS, no second deploy). Uses only
+// node:fs — no runtime dependencies.
+// ---------------------------------------------------------------------------
+const DIST = join(import.meta.dirname, "..", "frontend", "dist");
+const INDEX = join(DIST, "index.html");
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".pdf": "application/pdf",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/** Write a file to the response with a content type by extension. */
+async function serveFile(filePath: string, res: ServerResponse, status = 200): Promise<boolean> {
+  try {
+    const data = await readFile(filePath);
+    const headers: Record<string, string> = {
+      "content-type": MIME[extname(filePath).toLowerCase()] ?? "application/octet-stream",
+      "content-length": String(data.length),
+    };
+    // Vite fingerprints asset filenames, so they can be cached forever.
+    if (filePath.includes(`${sep}assets${sep}`)) {
+      headers["cache-control"] = "public, max-age=31536000, immutable";
+    }
+    res.writeHead(status, headers);
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Serve an existing static file under DIST (path-traversal safe). */
+async function serveStatic(path: string, res: ServerResponse): Promise<boolean> {
+  if (path === "/") return false; // let the SPA fallback serve index.html
+  const rel = normalize(decodeURIComponent(path)).replace(/^(\.\.(\/|\\|$))+/, "");
+  const filePath = join(DIST, rel);
+  if (filePath !== DIST && !filePath.startsWith(DIST + sep)) return false; // escape guard
+  try {
+    if (!(await stat(filePath)).isFile()) return false;
+  } catch {
+    return false;
+  }
+  return serveFile(filePath, res);
+}
+
 const server = createServer(async (req, res) => {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -124,7 +190,7 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { status: "ok", backend: store.backend });
     }
 
-    if (method === "GET" && path === "/") {
+    if (method === "GET" && path === "/api") {
       return send(res, 200, {
         service: "kashikeyo-ledger",
         status: "ok",
@@ -577,6 +643,14 @@ const server = createServer(async (req, res) => {
         return send(res, 400, { error: "from and to query params are required (YYYY-MM-DD)" });
       }
       return send(res, 200, await store.revenue(from, to));
+    }
+
+    // No API route matched. For GETs, serve the built frontend: a real asset if
+    // it exists, else the SPA entry (index.html). If no build is present (local
+    // API-only dev), fall through to a JSON 404.
+    if (method === "GET" && !path.startsWith("/api")) {
+      if (await serveStatic(path, res)) return;
+      if (await serveFile(INDEX, res)) return;
     }
 
     return send(res, 404, { error: `No route for ${method} ${path}` });
