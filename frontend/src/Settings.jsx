@@ -93,9 +93,12 @@ function DeclarationCard() {
     <SettingsCard icon={PenLine} title="MIRA filing declaration">
       <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>
         Signed onto every MIRA 205 / 206 export. Stored on this device.</div>
+      <Field label="Title">
+        <input value={decl.title || ""} onChange={(e) => update({ title: e.target.value })}
+          placeholder="e.g. Mr / Ms / Dr" style={inp} /></Field>
       <Field label="Declarant name">
         <input value={decl.name || ""} onChange={(e) => update({ name: e.target.value })}
-          placeholder="Full name" style={inp} /></Field>
+          placeholder="First &amp; other names" style={inp} /></Field>
       <Field label="Designation">
         <input value={decl.designation || ""} onChange={(e) => update({ designation: e.target.value })}
           placeholder="e.g. Accountant" style={inp} /></Field>

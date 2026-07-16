@@ -156,7 +156,8 @@ export async function exportFilingPdf206(f, taxpayer) {
   page.drawLine({ start: { x: colR, y }, end: { x: colR + 160, y }, thickness: 0.8, color: INK });
   text("Authorised signature", M, y - 12, 8, font, FAINT);
   text("Date", colR, y - 12, 8, font, FAINT);
-  if (decl.name) text(decl.name, M, y - 26, 10, bold, INK);
+  const declName = [decl.title, decl.name].filter(Boolean).join(" ");
+  if (declName) text(declName, M, y - 26, 10, bold, INK);
   if (decl.designation) text(decl.designation, M, y - 38, 8.5, font, MUTED);
 
   // Footer
