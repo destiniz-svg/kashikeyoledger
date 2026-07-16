@@ -7,8 +7,8 @@ import { T, mono } from "./theme.js";
 --------------------------------------------------------------------------- */
 const NAV = [
   { id: "dashboard", label: "Dashboard", short: "Overview", icon: LayoutDashboard },
-  { id: "bills", label: "Bills to pay", short: "Bills", icon: ReceiptText, badge: 6 },
-  { id: "approval", label: "Approvals", short: "Approve", icon: CheckCircle2, badge: 3 },
+  { id: "bills", label: "Bills to pay", short: "Bills", icon: ReceiptText },
+  { id: "approval", label: "Approvals", short: "Approve", icon: CheckCircle2 },
   { group: "Purchases", icon: Wallet, children: [
       { id: "vendors", label: "Vendors" },
       { id: "inventory", label: "Inventory" },
@@ -29,7 +29,7 @@ export function Sidebar({ active, onNav, counts }) {
 
   const Item = ({ n }) => {
     const on = active === n.id; const Icon = n.icon;
-    const badge = counts?.[n.id] ?? n.badge;
+    const badge = counts?.[n.id];
     return (
       <button onClick={() => onNav(n.id)}
         className="flex items-center gap-3 rounded-lg text-left transition-colors focus:outline-none"
@@ -193,7 +193,7 @@ export function BottomNav({ active, onNav, counts }) {
         paddingBottom: "env(safe-area-inset-bottom)" }}>
         {tabs.map((n) => {
           const on = active === n.id; const Icon = n.icon;
-          const badge = counts?.[n.id] ?? n.badge;
+          const badge = counts?.[n.id];
           return (
             <button key={n.id} onClick={() => onNav(n.id)}
               className="flex-1 flex flex-col items-center justify-center gap-1 focus:outline-none"
