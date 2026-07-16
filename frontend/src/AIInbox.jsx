@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ScanLine, UploadCloud, FileText, Image as ImageIcon, Check, AlertTriangle,
   Sparkles, ChevronDown, X, Pencil, Wand2, Trash2, Landmark, ArrowDownLeft, ArrowUpRight } from "lucide-react";
-import { getDocuments, uploadDocument, overrideDocument, postDocumentToBank, getRules, deleteRule } from "./api.js";
+import { getDocuments, uploadDocument, overrideDocument, postDocumentToBank, getRules, deleteRule, getBanking } from "./api.js";
 import { T, mono, num, fmt, fmtDate, useW } from "./theme.js";
 import { Eyebrow, KpiTile, TaxChip } from "./ui.jsx";
 
@@ -177,13 +177,20 @@ function ConfidenceBar({ score }) {
   );
 }
 
-function DocRow({ doc, onOverride, onPostToBank }) {
+function DocRow({ doc, accounts = [], onOverride, onPostToBank }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [posting, setPosting] = useState(false);
   const e = doc.extraction;
   const bank = isBankDoc(e);
+  // Default the destination to a matching-currency account.
+  const [acctId, setAcctId] = useState("");
+  useEffect(() => {
+    if (!bank || acctId || accounts.length === 0) return;
+    const match = accounts.find((a) => a.currency === e?.currency) || accounts[0];
+    if (match) setAcctId(match.id);
+  }, [bank, accounts, e?.currency, acctId]);
   const inflow = e?.direction === "IN";
   const isPdf = doc.mimeType === "application/pdf";
   const flags = e?.validationFlags || [];
@@ -206,7 +213,7 @@ function DocRow({ doc, onOverride, onPostToBank }) {
   async function postBank() {
     if (posting) return;
     setPosting(true);
-    try { await onPostToBank(doc.id); } finally { setPosting(false); }
+    try { await onPostToBank(doc.id, acctId || undefined); } finally { setPosting(false); }
   }
 
   return (
@@ -343,14 +350,23 @@ function DocRow({ doc, onOverride, onPostToBank }) {
                 <BankField label="Reference" v={e.reference || "—"} />
                 <BankField label="Counterparty" v={e.counterparty || "—"} />
               </div>
-              <div className="flex items-center gap-2 mt-3.5" style={{ borderTop: `1px solid ${T.line2}`, paddingTop: 12 }}>
+              <div className="flex flex-wrap items-center gap-2 mt-3.5" style={{ borderTop: `1px solid ${T.line2}`, paddingTop: 12 }}>
+                {accounts.length > 0 && (
+                  <select value={acctId} onChange={(ev) => setAcctId(ev.target.value)}
+                    style={{ border: `1px solid ${T.line}`, borderRadius: 9, padding: "9px 10px", fontSize: 12.5,
+                      color: T.text, background: T.surface }}>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name} · {a.currency}</option>
+                    ))}
+                  </select>
+                )}
                 <button onClick={postBank} disabled={posting}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.ink, color: "#fff",
                     borderRadius: 9, padding: "9px 16px", fontSize: 12.5, fontWeight: 600,
                     cursor: posting ? "default" : "pointer", opacity: posting ? 0.7 : 1 }}>
                   <Landmark size={14} />{posting ? "Posting…" : "Post to Banking"}</button>
-                <span style={{ fontSize: 11.5, color: T.faint }}>
-                  Adds an unreconciled line to the matching account for you to match.</span>
+                <span style={{ fontSize: 11.5, color: T.faint, flex: 1, minWidth: 140 }}>
+                  Adds an unreconciled line for you to match.</span>
               </div>
             </div>
           ) : (
@@ -415,6 +431,7 @@ export function AIInbox({ session, onRequireLogin }) {
   const w = useW(); const wide = w >= 768;
   const [docs, setDocs] = useState(SAMPLE_DOCS);
   const [rules, setRules] = useState([]);
+  const [accounts, setAccounts] = useState([]);
   const [live, setLive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -431,7 +448,10 @@ export function AIInbox({ session, onRequireLogin }) {
   async function loadRules() {
     try { const r = await getRules(); if (r?.rules) setRules(r.rules); } catch { /* ignore */ }
   }
-  useEffect(() => { load(); loadRules(); }, []);
+  async function loadAccounts() {
+    try { const b = await getBanking(); if (b?.accounts) setAccounts(b.accounts); } catch { /* ignore */ }
+  }
+  useEffect(() => { load(); loadRules(); loadAccounts(); }, []);
 
   // Apply a human correction. Live: persist + refetch. Sample: optimistic local.
   async function handleOverride(docId, payload) {
@@ -464,12 +484,12 @@ export function AIInbox({ session, onRequireLogin }) {
   }
 
   // Post a bank/cash document into the Banking module for reconciliation.
-  async function handlePostToBank(docId) {
+  async function handlePostToBank(docId, bankAccountId) {
     if (live && !session) { onRequireLogin(); return; }
     setErr(null); setNote(null);
     if (live) {
       try {
-        const res = await postDocumentToBank(docId);
+        const res = await postDocumentToBank(docId, bankAccountId);
         setNote(res?.duplicates
           ? "Already posted to Banking — nothing added."
           : `Posted to ${res?.bankAccountName || "Banking"} — reconcile it under Banking.`);
@@ -583,7 +603,7 @@ export function AIInbox({ session, onRequireLogin }) {
           <div style={{ padding: "34px 16px", textAlign: "center", fontFamily: mono, fontSize: 12, color: T.faint }}>
             No documents yet — upload one above to get started.</div>
         ) : (
-          docs.map((d) => <DocRow key={d.id} doc={d} onOverride={handleOverride} onPostToBank={handlePostToBank} />)
+          docs.map((d) => <DocRow key={d.id} doc={d} accounts={accounts} onOverride={handleOverride} onPostToBank={handlePostToBank} />)
         )}
       </div>
 

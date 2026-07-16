@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { Search, Download, X } from "lucide-react";
 import { getVendors } from "./api.js";
 import { T, mono, num, fmt, fmt0, useW } from "./theme.js";
 import { BY_VENDOR } from "./data.js";
 import { Eyebrow } from "./ui.jsx";
+import { downloadCsv } from "./csv.js";
 
 /* ---------------------------------------------------------------------------
    Vendors — directory with spend rollups
@@ -14,16 +16,29 @@ const VENDOR_DEMO = BY_VENDOR.map((v) => ({
 
 export function Vendors() {
   const w = useW(); const wide = w >= 768;
-  const [rows, setRows] = useState(VENDOR_DEMO);
+  const [all, setAll] = useState(VENDOR_DEMO);
   const [live, setLive] = useState(false);
+  const [q, setQ] = useState("");
   useEffect(() => {
     let alive = true;
     getVendors()
-      .then((d) => { if (alive && Array.isArray(d) && d.length) { setRows(d); setLive(true); } })
+      .then((d) => { if (alive && Array.isArray(d) && d.length) { setAll(d); setLive(true); } })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  const rows = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return all;
+    return all.filter((v) => (v.name + " " + (v.tin || "")).toLowerCase().includes(s));
+  }, [all, q]);
   const total = rows.reduce((s, v) => s + v.totalSpend, 0);
+
+  const exportCsv = () => downloadCsv(
+    `kashikeyo-vendors-${new Date().toISOString().slice(0, 10)}.csv`,
+    ["Vendor", "TIN", "GST registered", "Currency", "Bills", "Last activity", "Total spend"],
+    rows.map((v) => [v.name, v.tin, v.gstRegistered ? "Yes" : "No", v.currency, v.billCount, v.lastBillDate, v.totalSpend]),
+  );
   return (
     <div className="p-4 sm:p-6 lg:p-8" style={{ background: T.paper }}>
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${T.line}`,
@@ -48,7 +63,25 @@ export function Vendors() {
               {fmt0(total)}</div>
           </div>
         </div>
-        {wide ? (
+
+        {/* Toolbar: search + export */}
+        <div className="flex items-center gap-2 px-4 sm:px-6 py-3" style={{ borderBottom: `1px solid ${T.line}` }}>
+          <div className="flex items-center gap-2 rounded-lg px-3 flex-1" style={{ background: T.paper,
+            border: `1px solid ${T.line}`, minHeight: 38, maxWidth: 340 }}>
+            <Search size={15} color={T.faint} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search vendors or TIN…"
+              className="bg-transparent outline-none w-full" style={{ fontSize: 12.5, color: T.text }} />
+            {q && <button onClick={() => setQ("")} className="focus:outline-none"><X size={14} color={T.faint} /></button>}
+          </div>
+          <button onClick={exportCsv} className="flex items-center gap-2 rounded-lg px-3 focus:outline-none k-press shrink-0"
+            style={{ border: `1px solid ${T.line}`, fontSize: 12.5, color: T.muted, minHeight: 38 }}>
+            <Download size={14} /> <span className="hidden sm:inline">Export</span></button>
+        </div>
+
+        {rows.length === 0 ? (
+          <div style={{ padding: "34px 16px", textAlign: "center", fontFamily: mono, fontSize: 12, color: T.faint }}>
+            No vendors match “{q}”.</div>
+        ) : wide ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: T.paper }}>
               {["Vendor", "GST", "Bills", "Last activity", "Total spend"].map((h, i) => (
@@ -57,8 +90,9 @@ export function Vendors() {
                   color: T.faint, fontWeight: 600, borderBottom: `1px solid ${T.line}` }}>{h}</th>
               ))}</tr></thead>
             <tbody>
-              {rows.map((v) => (
-                <tr key={v.id} style={{ borderBottom: `1px solid ${T.line2}` }}>
+              {rows.map((v, i) => (
+                <tr key={v.id} className="k-in" style={{ borderBottom: `1px solid ${T.line2}`,
+                  animationDelay: `${Math.min(i, 12) * 28}ms` }}>
                   <td style={{ padding: "13px 16px" }}>
                     <div className="flex items-center gap-3">
                       <div style={{ width: 32, height: 32, borderRadius: 999, background: T.tealSoft,
@@ -87,8 +121,8 @@ export function Vendors() {
         ) : (
           <div>
             {rows.map((v, i) => (
-              <div key={v.id} className="flex items-center gap-3 px-4 py-3.5"
-                style={{ borderTop: i ? `1px solid ${T.line2}` : "none" }}>
+              <div key={v.id} className="flex items-center gap-3 px-4 py-3.5 k-in"
+                style={{ borderTop: i ? `1px solid ${T.line2}` : "none", animationDelay: `${Math.min(i, 12) * 28}ms` }}>
                 <div style={{ width: 34, height: 34, borderRadius: 999, background: T.tealSoft,
                   color: T.teal, display: "grid", placeItems: "center", fontFamily: mono,
                   fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{v.ini}</div>
