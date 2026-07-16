@@ -85,7 +85,7 @@ function DataPanel({ b, onApprove, onReject, busy, error }) {
       <div className="flex items-center justify-between mb-5">
         <Eyebrow>Extracted data</Eyebrow>
         <span className="flex items-center gap-1.5" style={{ fontFamily: mono, fontSize: 10.5,
-          color: T.teal }}><Sparkles size={12} /> Claude · 94% confidence</span>
+          color: T.teal }}><Sparkles size={12} /> AI · 94% confidence</span>
       </div>
       <div className="grid grid-cols-2 gap-y-4 gap-x-4 sm:gap-x-6 mb-6">
         <ExtractedField label="Vendor" value={b.vendor} confidence={0.96} />

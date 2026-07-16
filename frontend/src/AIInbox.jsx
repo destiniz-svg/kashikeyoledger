@@ -29,7 +29,7 @@ function overrideLocal(e, o) {
 }
 
 /* ---------------------------------------------------------------------------
-   AI Inbox — upload a receipt / invoice / bill and let Claude read it. The file
+   AI Inbox — upload a receipt / invoice / bill and let the AI read it. The file
    is stored, extracted into structured fields, categorised for MIRA (GGST 8% /
    TGST 17% / zero-rated / exempt / out-of-scope) and flagged for review.
 --------------------------------------------------------------------------- */
@@ -61,7 +61,7 @@ const SAMPLE_DOCS = [
     status: "EXTRACTED",
     captureSource: "MANUAL_UPLOAD",
     createdAt: "2026-07-14T09:20:00.000Z",
-    model: "claude-opus-4-8",
+    model: "AI · sample",
     extraction: {
       documentType: "INVOICE",
       vendorName: "Island Mark Hardware Pvt Ltd",
@@ -94,7 +94,7 @@ const SAMPLE_DOCS = [
     status: "EXTRACTED",
     captureSource: "MANUAL_UPLOAD",
     createdAt: "2026-07-13T14:02:00.000Z",
-    model: "claude-opus-4-8",
+    model: "AI · sample",
     extraction: {
       documentType: "RECEIPT",
       vendorName: "Reef Divers Maldives",
@@ -440,7 +440,7 @@ export function AIInbox({ session, onRequireLogin }) {
         <div style={{ fontSize: 14.5, fontWeight: 650, color: T.text }}>
           {busy ? "Reading your document…" : "Drop a receipt, invoice or bill"}</div>
         <div style={{ fontFamily: mono, fontSize: 11, color: T.faint }}>
-          PNG · JPG · WEBP · GIF · PDF, up to 10 MB — Claude extracts and categorises it for MIRA</div>
+          PNG · JPG · WEBP · GIF · PDF, up to 10 MB — the AI extracts and categorises it for MIRA</div>
         <span style={{ marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, background: T.ink,
           color: "#fff", borderRadius: 10, padding: "8px 16px", fontSize: 12.5, fontWeight: 600 }}>
           <UploadCloud size={15} /> Choose file</span>

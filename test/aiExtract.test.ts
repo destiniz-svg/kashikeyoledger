@@ -3,14 +3,21 @@ import { test } from "node:test";
 import {
   ALLOWED_UPLOAD_MIME,
   DEFAULT_EXTRACTION_MODEL,
+  DEFAULT_GEMINI_MODEL,
   EXTRACTION_TOOL,
+  GEMINI_EXTRACTION_SCHEMA,
   buildExtractionRequest,
+  buildGeminiRequest,
   deriveValidationFlags,
   extractDocument,
+  extractDocumentGemini,
+  hasProvider,
   isPdfMedia,
   mediaTypeFor,
   normalizeExtraction,
   parseExtractionResponse,
+  parseGeminiResponse,
+  runExtraction,
 } from "../src/aiExtract.ts";
 import { TAX_CATEGORIES } from "../src/store.ts";
 
@@ -233,4 +240,99 @@ test("extractDocument surfaces an API error message", async () => {
 
 test("every allowed upload MIME maps cleanly", () => {
   for (const mt of ALLOWED_UPLOAD_MIME) assert.equal(mediaTypeFor(mt), mt);
+});
+
+/* -- Gemini provider -------------------------------------------------------- */
+
+test("the Gemini schema only permits valid MIRA tax categories", () => {
+  const enumVals = GEMINI_EXTRACTION_SCHEMA.properties.predicted_tax_category.enum;
+  assert.deepEqual([...enumVals].sort(), [...TAX_CATEGORIES].sort());
+});
+
+test("buildGeminiRequest uses inline_data and a JSON response schema", () => {
+  const req = buildGeminiRequest({ base64: "AAAA", mediaType: "application/pdf", filename: "x.pdf" });
+  const parts = (req.contents as { parts: { inline_data?: { mime_type: string } }[] }[])[0].parts;
+  assert.equal(parts[0].inline_data?.mime_type, "application/pdf");
+  const gc = req.generationConfig as { responseMimeType: string; responseSchema: unknown };
+  assert.equal(gc.responseMimeType, "application/json");
+  assert.ok(gc.responseSchema);
+});
+
+test("parseGeminiResponse parses the JSON text and derives flags", () => {
+  const body = {
+    candidates: [{ content: { parts: [{ text: JSON.stringify({
+      document_type: "RECEIPT", currency: "MVR", line_items: [],
+      predicted_tax_category: "GGST", confidence_score: 0.9, ai_reasoning: "ok",
+    }) }] } }],
+  };
+  const e = parseGeminiResponse(body);
+  assert.equal(e.documentType, "RECEIPT");
+  assert.ok(e.validationFlags.includes("NO_LINE_ITEMS"));
+});
+
+test("parseGeminiResponse throws on a safety block or empty content", () => {
+  assert.throws(() => parseGeminiResponse({ promptFeedback: { blockReason: "SAFETY" } }), /blocked/);
+  assert.throws(() => parseGeminiResponse({ candidates: [] }), /no content/);
+});
+
+test("extractDocumentGemini sends the API key header and parses the reply", async () => {
+  let seenUrl = "";
+  let seenInit: RequestInit = {};
+  const fakeFetch = async (url: string, init: RequestInit) => {
+    seenUrl = url; seenInit = init;
+    return new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: JSON.stringify({
+        document_type: "INVOICE", vendor_name: "Test Co", currency: "MVR",
+        line_items: [{ description: "x", quantity: 1, unit_price: 10, amount: 10, tax_category: "GGST", tax_rate_percent: 8 }],
+        subtotal: 10, tax_total: 0.8, grand_total: 10.8,
+        predicted_tax_category: "GGST", confidence_score: 0.9, ai_reasoning: "ok",
+      }) }] } }],
+    }), { status: 200 });
+  };
+  const e = await extractDocumentGemini({ apiKey: "g-key", base64: "AAAA", contentType: "image/png", fetchImpl: fakeFetch });
+  assert.ok(seenUrl.includes(`${DEFAULT_GEMINI_MODEL}:generateContent`));
+  assert.equal((seenInit.headers as Record<string, string>)["x-goog-api-key"], "g-key");
+  assert.equal(e.vendorName, "Test Co");
+});
+
+test("extractDocumentGemini surfaces an API error", async () => {
+  const fakeFetch = async () => new Response(JSON.stringify({ error: { message: "quota exceeded" } }), { status: 429 });
+  await assert.rejects(
+    () => extractDocumentGemini({ apiKey: "g", base64: "A", contentType: "image/png", fetchImpl: fakeFetch }),
+    /quota exceeded/,
+  );
+});
+
+test("hasProvider is true only when a key is set", () => {
+  assert.equal(hasProvider({}), false);
+  assert.equal(hasProvider({ anthropicKey: "x" }), true);
+  assert.equal(hasProvider({ geminiKey: "y" }), true);
+});
+
+test("runExtraction prefers Anthropic, falls back to Gemini, else throws", async () => {
+  const anthropicFetch = async () => new Response(JSON.stringify({
+    content: [{ type: "tool_use", name: "record_extraction", input: {
+      document_type: "RECEIPT", currency: "MVR", line_items: [],
+      predicted_tax_category: "GGST", confidence_score: 0.9, ai_reasoning: "a" } }],
+  }), { status: 200 });
+  const geminiFetch = async () => new Response(JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify({
+      document_type: "BILL", currency: "MVR", line_items: [],
+      predicted_tax_category: "GGST", confidence_score: 0.9, ai_reasoning: "g" }) }] } }],
+  }), { status: 200 });
+
+  // Both keys set → Anthropic wins.
+  const both = await runExtraction({ anthropicKey: "a", geminiKey: "g",
+    base64: "A", contentType: "image/png", fetchImpl: anthropicFetch });
+  assert.equal(both.model, DEFAULT_EXTRACTION_MODEL);
+  assert.equal(both.extraction.documentType, "RECEIPT");
+
+  // Only Gemini set → Gemini runs.
+  const g = await runExtraction({ geminiKey: "g", geminiModel: "gemini-2.5-pro",
+    base64: "A", contentType: "image/png", fetchImpl: geminiFetch });
+  assert.equal(g.model, "gemini-2.5-pro");
+  assert.equal(g.extraction.documentType, "BILL");
+
+  // Neither set → throws.
+  await assert.rejects(() => runExtraction({ base64: "A", contentType: "image/png" }), /No AI provider/);
 });

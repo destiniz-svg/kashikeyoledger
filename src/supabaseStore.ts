@@ -46,9 +46,9 @@ import {
   type VendorRow,
 } from "./store.ts";
 import {
-  DEFAULT_EXTRACTION_MODEL,
-  extractDocument,
+  hasProvider,
   mediaTypeFor,
+  runExtraction,
   type Extraction,
 } from "./aiExtract.ts";
 import {
@@ -100,10 +100,14 @@ export interface SupabaseConfig {
   url: string;
   key: string;
   org: string;
-  /** Anthropic API key for AI extraction; when absent, extraction is skipped. */
+  /** Anthropic API key for AI extraction (preferred when set). */
   anthropicKey?: string;
-  /** Model for extraction; defaults to claude-opus-4-8. */
+  /** Anthropic model; defaults to claude-opus-4-8. */
   anthropicModel?: string;
+  /** Gemini (Google AI Studio) API key — used when no Anthropic key is set. */
+  geminiKey?: string;
+  /** Gemini model; defaults to gemini-2.5-flash. */
+  geminiModel?: string;
 }
 
 /** The document storage bucket (created by the phase2 migration). */
@@ -205,6 +209,8 @@ export class SupabaseStore implements LedgerStore {
   readonly #key: string;
   readonly #anthropicKey: string;
   readonly #anthropicModel: string;
+  readonly #geminiKey: string;
+  readonly #geminiModel: string;
   readonly #authCache = new Map<string, number>();
 
   constructor(config: SupabaseConfig) {
@@ -212,7 +218,19 @@ export class SupabaseStore implements LedgerStore {
     this.#key = config.key;
     this.org = config.org;
     this.#anthropicKey = config.anthropicKey ?? "";
-    this.#anthropicModel = config.anthropicModel || DEFAULT_EXTRACTION_MODEL;
+    this.#anthropicModel = config.anthropicModel ?? "";
+    this.#geminiKey = config.geminiKey ?? "";
+    this.#geminiModel = config.geminiModel ?? "";
+  }
+
+  /** The configured AI provider(s) for extraction. */
+  get #provider() {
+    return {
+      anthropicKey: this.#anthropicKey,
+      anthropicModel: this.#anthropicModel,
+      geminiKey: this.#geminiKey,
+      geminiModel: this.#geminiModel,
+    };
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -861,26 +879,26 @@ export class SupabaseStore implements LedgerStore {
       duplicate: false,
     };
 
-    // No key configured: keep the file, skip extraction, tell the caller why.
-    if (!this.#anthropicKey) {
+    // No provider configured: keep the file, skip extraction, tell the caller why.
+    if (!hasProvider(this.#provider)) {
       return {
         ...base,
         status: "UPLOADED",
         model: null,
         extraction: null,
-        error: "AI extraction is not configured (set ANTHROPIC_API_KEY)",
+        error: "AI extraction is not configured (set ANTHROPIC_API_KEY or GEMINI_API_KEY)",
       };
     }
 
     try {
       await this.#setDocumentStatus(documentId, "EXTRACTING");
-      let extraction = await extractDocument({
-        apiKey: this.#anthropicKey,
-        model: this.#anthropicModel,
+      const run = await runExtraction({
+        ...this.#provider,
         base64: upload.dataBase64,
         contentType: mimeType,
         filename: upload.filename,
       });
+      let extraction = run.extraction;
       // Phase 3: auto-apply a learned categorization rule if one matches.
       const hit = matchRule(extraction, await this.#activeRules());
       if (hit) {
@@ -892,20 +910,20 @@ export class SupabaseStore implements LedgerStore {
         body: JSON.stringify({
           document_id: documentId,
           organization_id: this.org,
-          model: this.#anthropicModel,
+          model: run.model,
           raw_output: extraction,
           field_confidence: extraction.fieldConfidence,
           validation_flags: extraction.validationFlags,
         }),
       });
       await this.#setDocumentStatus(documentId, "EXTRACTED");
-      return { ...base, status: "EXTRACTED", model: this.#anthropicModel, extraction, error: null };
+      return { ...base, status: "EXTRACTED", model: run.model, extraction, error: null };
     } catch (err) {
       await this.#setDocumentStatus(documentId, "EXTRACTION_FAILED").catch(() => {});
       return {
         ...base,
         status: "EXTRACTION_FAILED",
-        model: this.#anthropicModel,
+        model: this.#anthropicModel || this.#geminiModel || null,
         extraction: null,
         error: err instanceof Error ? err.message : "Extraction failed",
       };

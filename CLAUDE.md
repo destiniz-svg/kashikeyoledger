@@ -104,12 +104,15 @@ tax logic stays isolated and replicable (see
 
 ## AI ingestion (Phase 2)
 
-Upload a receipt/invoice/bill and Claude reads it into structured, MIRA-mapped
-data. Dependency-free — `src/aiExtract.ts` calls the Anthropic Messages API over
-`fetch` (no SDK), model `claude-opus-4-8`, vision for images and a `document`
-block for PDFs. A single forced tool (`record_extraction`, `tool_choice`) makes
-the reply structured JSON we normalize and validate in code (no `strict`/beta
-header dependency).
+Upload a receipt/invoice/bill and an AI reads it into structured, MIRA-mapped
+data. Dependency-free — `src/aiExtract.ts` calls the provider's REST API over
+`fetch` (no SDK). **Two providers, auto-selected by which key is set**
+(`runExtraction`/`hasProvider`): **Anthropic** (Claude, preferred; model
+`claude-opus-4-8`) via the Messages API with a forced `record_extraction` tool;
+else **Gemini** (Google AI Studio; model `gemini-2.5-flash`) via
+`generateContent` with a `responseSchema`. Both read images and PDFs (inline)
+and feed the **same** shared prompt, normalization and validation-flag logic —
+only the wire format differs. The recorded `model` reflects whichever ran.
 
 - **`POST /documents`** `{ filename, contentType, dataBase64, captureSource? }`
   (write-guarded; body cap raised to 15 MB for the base64 payload). Flow:
@@ -117,9 +120,11 @@ header dependency).
   the same bytes returns the saved extraction, no second Claude call), insert a
   `documents` row, run extraction, write `ai_extractions`, move the doc to
   `EXTRACTED`/`EXTRACTION_FAILED`. **`GET /documents`** lists docs + extractions.
-- **No `ANTHROPIC_API_KEY`** → the file is still stored, extraction is skipped,
-  the doc stays `UPLOADED`, and the result carries an `error` note. Set
-  `ANTHROPIC_API_KEY` (and optional `ANTHROPIC_MODEL`) as Railway service vars.
+- **No provider key** → the file is still stored, extraction is skipped, the doc
+  stays `UPLOADED`, and the result carries an `error` note. Configure a provider
+  as Railway service vars: `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`), or
+  `GEMINI_API_KEY`/`GOOGLE_API_KEY` (+ optional `GEMINI_MODEL`). If both are set,
+  Anthropic is used.
 - The extraction captures vendor + **TIN**, dates, currency + FX, line items
   (each with a MIRA `taxCategory` + rate + accounting category), totals, a
   `predictedTaxCategory`, `confidenceScore`, `aiReasoning`, per-field confidence

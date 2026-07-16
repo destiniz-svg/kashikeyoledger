@@ -20,6 +20,9 @@ export function createStore(env: NodeJS.ProcessEnv = process.env): LedgerStore {
       org,
       anthropicKey: env.ANTHROPIC_API_KEY,
       anthropicModel: env.ANTHROPIC_MODEL,
+      // Gemini (Google AI Studio) is used when no Anthropic key is set.
+      geminiKey: env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY,
+      geminiModel: env.GEMINI_MODEL,
     });
   }
   return new MemoryStore();

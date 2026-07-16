@@ -18,6 +18,9 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 export const DEFAULT_EXTRACTION_MODEL = "claude-opus-4-8";
 
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+
 /** Upload MIME types Claude can read directly (images + PDF). */
 export const ALLOWED_UPLOAD_MIME = [
   "image/png",
@@ -410,4 +413,177 @@ export async function extractDocument(opts: {
     throw new Error(String(msg));
   }
   return parseExtractionResponse(body);
+}
+
+// ---------------------------------------------------------------------------
+// Gemini (Google AI Studio) provider. Same shared prompt / normalization /
+// validation as the Claude path — only the wire format differs. Gemini reads
+// images and PDFs via inline_data and returns structured JSON via a response
+// schema. Also dependency-free (plain fetch).
+// ---------------------------------------------------------------------------
+
+/**
+ * Gemini's responseSchema is an OpenAPI-3 subset: uppercase `type`, `nullable`
+ * for optional fields (no JSON-Schema `["string","null"]` unions), and no free-
+ * form object maps — so `field_confidence` is omitted here (it's optional).
+ */
+export const GEMINI_EXTRACTION_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    document_type: { type: "STRING", enum: [...DOCUMENT_TYPES] },
+    vendor_name: { type: "STRING", nullable: true },
+    vendor_tin: { type: "STRING", nullable: true },
+    invoice_number: { type: "STRING", nullable: true },
+    document_date: { type: "STRING", nullable: true },
+    due_date: { type: "STRING", nullable: true },
+    currency: { type: "STRING" },
+    fx_rate_to_mvr: { type: "NUMBER", nullable: true },
+    line_items: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          description: { type: "STRING" },
+          quantity: { type: "NUMBER" },
+          unit_price: { type: "NUMBER" },
+          amount: { type: "NUMBER" },
+          tax_category: { type: "STRING", enum: [...TAX_ENUM] },
+          tax_rate_percent: { type: "NUMBER" },
+          accounting_category: { type: "STRING", nullable: true },
+        },
+        required: ["description", "quantity", "unit_price", "amount", "tax_category", "tax_rate_percent"],
+      },
+    },
+    subtotal: { type: "NUMBER", nullable: true },
+    tax_total: { type: "NUMBER", nullable: true },
+    grand_total: { type: "NUMBER", nullable: true },
+    accounting_category: { type: "STRING", nullable: true },
+    predicted_tax_category: { type: "STRING", enum: [...TAX_ENUM] },
+    confidence_score: { type: "NUMBER" },
+    ai_reasoning: { type: "STRING" },
+  },
+  required: ["document_type", "currency", "line_items", "predicted_tax_category", "confidence_score", "ai_reasoning"],
+} as const;
+
+/** Build the Gemini generateContent request body for one document. Pure. */
+export function buildGeminiRequest(opts: {
+  base64: string;
+  mediaType: string;
+  filename?: string;
+}): Record<string, unknown> {
+  const { base64, mediaType, filename } = opts;
+  const instruction =
+    `Read this ${isPdfMedia(mediaType) ? "PDF" : "image"} of a purchase document` +
+    (filename ? ` (file: ${filename})` : "") +
+    ". Extract every field and line item, categorise it for MIRA, and return the JSON.";
+  return {
+    system_instruction: { parts: [{ text: EXTRACTION_SYSTEM_PROMPT }] },
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inline_data: { mime_type: mediaType, data: base64 } },
+          { text: instruction },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: GEMINI_EXTRACTION_SCHEMA,
+      temperature: 0,
+    },
+  };
+}
+
+/** Pull the structured JSON out of a Gemini generateContent response. */
+export function parseGeminiResponse(body: unknown): Extraction {
+  const b = body as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    promptFeedback?: { blockReason?: string };
+  };
+  if (b?.promptFeedback?.blockReason) {
+    throw new Error(`Gemini blocked the request (${b.promptFeedback.blockReason})`);
+  }
+  const parts = b?.candidates?.[0]?.content?.parts ?? [];
+  const text = parts.find((p) => typeof p.text === "string")?.text;
+  if (!text) throw new Error("Gemini returned no content");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Gemini did not return valid JSON");
+  }
+  const e = normalizeExtraction(parsed);
+  e.validationFlags = deriveValidationFlags(e);
+  return e;
+}
+
+/** Read a document with Gemini and return the structured extraction. */
+export async function extractDocumentGemini(opts: {
+  apiKey: string;
+  model?: string;
+  base64: string;
+  contentType: string;
+  filename?: string;
+  fetchImpl?: FetchLike;
+}): Promise<Extraction> {
+  const { apiKey, base64, contentType, filename } = opts;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
+  const model = opts.model || DEFAULT_GEMINI_MODEL;
+  const mediaType = mediaTypeFor(contentType);
+  const doFetch = opts.fetchImpl ?? (globalThis.fetch as FetchLike);
+  const res = await doFetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify(buildGeminiRequest({ base64, mediaType, filename })),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    body = { raw: text };
+  }
+  if (!res.ok) {
+    const msg =
+      (body as { error?: { message?: string } })?.error?.message ??
+      `Gemini request failed (${res.status})`;
+    throw new Error(String(msg));
+  }
+  return parseGeminiResponse(body);
+}
+
+/** Config for picking a provider: Anthropic first, else Gemini. */
+export interface ProviderConfig {
+  anthropicKey?: string;
+  anthropicModel?: string;
+  geminiKey?: string;
+  geminiModel?: string;
+}
+
+/** True when at least one AI provider key is configured. */
+export function hasProvider(cfg: ProviderConfig): boolean {
+  return Boolean(cfg.anthropicKey || cfg.geminiKey);
+}
+
+/**
+ * Run extraction with whichever provider is configured — Anthropic (Claude) when
+ * its key is set, else Gemini. Returns the extraction and the model that ran it.
+ * Throws if neither key is configured.
+ */
+export async function runExtraction(
+  cfg: ProviderConfig & { base64: string; contentType: string; filename?: string; fetchImpl?: FetchLike },
+): Promise<{ extraction: Extraction; model: string }> {
+  const shared = { base64: cfg.base64, contentType: cfg.contentType, filename: cfg.filename, fetchImpl: cfg.fetchImpl };
+  if (cfg.anthropicKey) {
+    const model = cfg.anthropicModel || DEFAULT_EXTRACTION_MODEL;
+    const extraction = await extractDocument({ apiKey: cfg.anthropicKey, model, ...shared });
+    return { extraction, model };
+  }
+  if (cfg.geminiKey) {
+    const model = cfg.geminiModel || DEFAULT_GEMINI_MODEL;
+    const extraction = await extractDocumentGemini({ apiKey: cfg.geminiKey, model, ...shared });
+    return { extraction, model };
+  }
+  throw new Error("No AI provider configured (set ANTHROPIC_API_KEY or GEMINI_API_KEY)");
 }
