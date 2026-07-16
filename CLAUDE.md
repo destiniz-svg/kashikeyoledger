@@ -102,6 +102,99 @@ tax logic stays isolated and replicable (see
   base = 1:1 and requires a real rate for foreign currency; `grand_total_base`,
   `tax_total_base`, `amount_base` are generated MVR amounts.
 
+## AI ingestion (Phase 2)
+
+Upload a receipt/invoice/bill and an AI reads it into structured, MIRA-mapped
+data. Dependency-free — `src/aiExtract.ts` calls the provider's REST API over
+`fetch` (no SDK). **Two providers, auto-selected by which key is set**
+(`runExtraction`/`hasProvider`): **Anthropic** (Claude, preferred; model
+`claude-opus-4-8`) via the Messages API with a forced `record_extraction` tool;
+else **Gemini** (Google AI Studio; model `gemini-2.5-flash`) via
+`generateContent` with a `responseSchema`. Both read images and PDFs (inline)
+and feed the **same** shared prompt, normalization and validation-flag logic —
+only the wire format differs. The recorded `model` reflects whichever ran.
+
+- **`POST /documents`** `{ filename, contentType, dataBase64, captureSource? }`
+  (write-guarded; body cap raised to 15 MB for the base64 payload). Flow:
+  store the file at `documents/<org>/<sha256>` (deduped by hash — re-uploading
+  the same bytes returns the saved extraction, no second Claude call), insert a
+  `documents` row, run extraction, write `ai_extractions`, move the doc to
+  `EXTRACTED`/`EXTRACTION_FAILED`. **`GET /documents`** lists docs + extractions.
+- **No provider key** → the file is still stored, extraction is skipped, the doc
+  stays `UPLOADED`, and the result carries an `error` note. Configure a provider
+  as Railway service vars: `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`), or
+  `GEMINI_API_KEY`/`GOOGLE_API_KEY` (+ optional `GEMINI_MODEL`). If both are set,
+  Anthropic is used.
+- The extraction captures vendor + **TIN**, dates, currency + FX, line items
+  (each with a MIRA `taxCategory` + rate + accounting category), totals, a
+  `predictedTaxCategory`, `confidenceScore`, `aiReasoning`, per-field confidence
+  and derived `validationFlags` (e.g. `MISSING_VENDOR_TIN`, `TOTALS_MISMATCH`,
+  `FOREIGN_CURRENCY_NO_FX`). The Maldives context (MVR/Rf, Thaana/English, the
+  GGST 8% / TGST 17% / zero-rated / exempt / out-of-scope categories) lives in
+  `EXTRACTION_SYSTEM_PROMPT`.
+- **Document-type-aware (all scenarios, not just invoices).** The extractor
+  classifies `documentType` — purchase/sales invoice, bill, receipt, credit note,
+  and **bank/cash** documents (`BANK_DEPOSIT`, `BANK_WITHDRAWAL`, `BANK_TRANSFER`,
+  `BANK_STATEMENT`, `PAYMENT_VOUCHER`). Bank documents carry `direction`
+  (IN/OUT), `bankName`, `bankAccountRef`, `counterparty`, `reference`, are treated
+  as OUT_OF_SCOPE cash movements (no line items), and `deriveValidationFlags`
+  skips the vendor-TIN/invoice/line-item checks for them (flagging
+  `MISSING_AMOUNT`/`UNKNOWN_DIRECTION` instead). `isBankDocument()` and
+  `bankLineFromExtraction()` are the pure helpers.
+- **Route to Banking:** **`POST /documents/:id/post-to-bank`** `{ bankAccountId? }`
+  (write-guarded) turns a bank document into a reconcilable `bank_transaction`
+  (IN→CREDIT, OUT→DEBIT) via `importStatement` (deduped), picking a bank account
+  by currency when none is given. The AI Inbox shows bank docs with a money-in/out
+  chip and a **Post to Banking** action.
+- Storage bucket: [`supabase/phase2_ai_ingestion.sql`](supabase/phase2_ai_ingestion.sql)
+  (private, service-role only). The **in-memory** backend returns a canned
+  extraction so the flow works with no key/DB. Frontend: the **AI Inbox** screen
+  (`frontend/src/AIInbox.jsx`) — dropzone upload + explainable results.
+
+## Explainable AI & human override (Phase 3)
+
+Every extraction already ships its `confidenceScore`, per-field confidence and
+`aiReasoning` (Phase 2). Phase 3 lets a human **correct** an extraction and
+learns from it (`src/rules.ts`, pure/testable):
+
+- **`POST /documents/:id/override`** `{ taxCategory?, accountingCategory?,
+  vendorTin?, createRule?, ruleScope? }` (write-guarded) rewrites the stored
+  extraction (document- and line-level), marks it `overridden`, recomputes
+  `validationFlags`, and — unless `createRule:false` — saves a
+  **categorization rule**. The rule keys on the vendor TIN (preferred), else the
+  vendor name, or a keyword (`ruleScope:"keyword"`).
+- **Auto-apply**: on ingest, `matchRule` finds the best active rule (lowest
+  `priority`, then oldest) and `applyRuleToExtraction` rewrites the categories,
+  recording `appliedRule` provenance (`label`, `matchedOn`, the original
+  category) and bumping `times_applied`. Provenance lives in `appliedRule` /
+  `overridden`, **not** in `validationFlags` (so a cleanly-ruled doc isn't
+  counted as "needs review").
+- **`GET /rules`** lists active rules (with a human `label`); **`DELETE
+  /rules/:id`** soft-deactivates one (`is_active=false`).
+- Table [`supabase/phase3_categorization_rules.sql`](supabase/phase3_categorization_rules.sql):
+  `categorization_rules` (org-scoped; check constraints require ≥1 matcher and
+  ≥1 outcome; audited by `fn_audit`). The **in-memory** backend keeps rules in
+  process so the learn-and-apply loop works with no key/DB. Frontend: the **AI
+  Inbox** override editor (tax + accounting category, "remember this vendor")
+  and a **Learned rules** panel.
+
+## MIRA-ready dashboard (Phase 4)
+
+A readiness score + dual-currency view, computed from existing data (no new
+tables). `src/compliance.ts` is pure/testable; the server assembles the inputs.
+
+- **`GET /compliance`** returns a 0–100 `score` and `checks[]` (each `ok`/`warn`/
+  `risk` with a `detail`): vendor-TIN completeness (+ `unclaimableInputTax` — GST
+  that can't be claimed without a supplier TIN), AI-extraction review backlog,
+  bank reconciliation, ledger balance, and the soonest open GST filing's due
+  date. Score = 100 − (20 per risk, 8 per warn).
+- **Dual currency**: every figure comes as `{ mvr, usd }` using `store.mvrPerUsd()`
+  (latest `exchange_rates` USD→MVR, else the MMA peg **15.42**, seeded by
+  [`supabase/phase4_dashboard.sql`](supabase/phase4_dashboard.sql)).
+- Frontend `Dashboard.jsx`: a dark **dual-currency header** (MVR with USD
+  underneath, FX chip) and a **MIRA readiness** widget (score ring + drill-through
+  checks → Bills / AI Inbox / Banking / Tax filing / Reports).
+
 ## Ground rules for changes
 
 - Add or update tests in `test/` for any behavior change; keep `npm test`

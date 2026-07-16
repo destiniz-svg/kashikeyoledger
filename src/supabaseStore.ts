@@ -8,10 +8,12 @@
  * can bypass RLS as a trusted backend). The key is read from the environment —
  * never hard-coded.
  */
+import { createHash } from "node:crypto";
 import {
   StoreError,
   agingBucket,
   assertReconStatus,
+  assertUpload,
   bankTxnSigned,
   formatBillDate,
   nameInitials,
@@ -22,11 +24,16 @@ import {
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type DocumentRow,
+  type DocumentUpload,
+  type IngestResult,
   type ImportLineInput,
   type ImportResult,
   type MemberRow,
   type OrgSettings,
   type OrgSettingsPatch,
+  type OverrideResult,
+  type PostToBankResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -39,11 +46,85 @@ import {
   type TrialBalanceRow,
   type VendorRow,
 } from "./store.ts";
+import {
+  bankLineFromExtraction,
+  hasProvider,
+  isBankDocument,
+  mediaTypeFor,
+  runExtraction,
+  type Extraction,
+} from "./aiExtract.ts";
+import {
+  applyOverrideToExtraction,
+  applyRuleToExtraction,
+  buildRuleFromOverride,
+  matchRule,
+  normalizeRuleInput,
+  ruleLabel,
+  type CategorizationRule,
+  type OverrideInput,
+} from "./rules.ts";
+
+interface DbRule {
+  id: string;
+  match_vendor_tin: string | null;
+  match_vendor_pattern: string | null;
+  match_keyword: string | null;
+  set_tax_category: string | null;
+  set_accounting_category: string | null;
+  note: string | null;
+  priority: number;
+  times_applied: number;
+  source: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+function toRule(r: DbRule): CategorizationRule {
+  const rule: CategorizationRule = {
+    id: r.id,
+    matchVendorTin: r.match_vendor_tin,
+    matchVendorPattern: r.match_vendor_pattern,
+    matchKeyword: r.match_keyword,
+    setTaxCategory: r.set_tax_category,
+    setAccountingCategory: r.set_accounting_category,
+    note: r.note,
+    priority: r.priority,
+    timesApplied: r.times_applied,
+    source: r.source,
+    isActive: r.is_active,
+    createdAt: r.created_at,
+  };
+  rule.label = ruleLabel(rule);
+  return rule;
+}
 
 export interface SupabaseConfig {
   url: string;
   key: string;
   org: string;
+  /** Anthropic API key for AI extraction (preferred when set). */
+  anthropicKey?: string;
+  /** Anthropic model; defaults to claude-opus-4-8. */
+  anthropicModel?: string;
+  /** Gemini (Google AI Studio) API key — used when no Anthropic key is set. */
+  geminiKey?: string;
+  /** Gemini model; defaults to gemini-2.5-flash. */
+  geminiModel?: string;
+}
+
+/** The document storage bucket (created by the phase2 migration). */
+const DOC_BUCKET = "documents";
+
+interface DbDocument {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  byte_size: string | number;
+  status: string;
+  capture_source: string;
+  created_at: string;
+  ai_extractions?: { model: string; raw_output: unknown }[] | null;
 }
 
 interface DbAccount {
@@ -129,12 +210,30 @@ export class SupabaseStore implements LedgerStore {
   readonly org: string;
   readonly #url: string;
   readonly #key: string;
+  readonly #anthropicKey: string;
+  readonly #anthropicModel: string;
+  readonly #geminiKey: string;
+  readonly #geminiModel: string;
   readonly #authCache = new Map<string, number>();
 
   constructor(config: SupabaseConfig) {
     this.#url = config.url.replace(/\/+$/, "");
     this.#key = config.key;
     this.org = config.org;
+    this.#anthropicKey = config.anthropicKey ?? "";
+    this.#anthropicModel = config.anthropicModel ?? "";
+    this.#geminiKey = config.geminiKey ?? "";
+    this.#geminiModel = config.geminiModel ?? "";
+  }
+
+  /** The configured AI provider(s) for extraction. */
+  get #provider() {
+    return {
+      anthropicKey: this.#anthropicKey,
+      anthropicModel: this.#anthropicModel,
+      geminiKey: this.#geminiKey,
+      geminiModel: this.#geminiModel,
+    };
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -688,6 +787,308 @@ export class SupabaseStore implements LedgerStore {
       const email = r.profiles?.email ?? "";
       return { name, email, role: r.role, ini: nameInitials(name, email) };
     });
+  }
+
+  /** Upload raw bytes to the private `documents` bucket at `path`. */
+  async #uploadObject(path: string, bytes: Buffer, contentType: string): Promise<void> {
+    const res = await fetch(
+      `${this.#url}/storage/v1/object/${DOC_BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`,
+      {
+        method: "POST",
+        headers: {
+          apikey: this.#key,
+          authorization: `Bearer ${this.#key}`,
+          "content-type": contentType,
+          "x-upsert": "true",
+        },
+        body: bytes,
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new StoreError(`Document storage upload failed: ${text || res.status}`, 502);
+    }
+  }
+
+  /** Shape a documents row (+ embedded extraction) into a DocumentRow. */
+  #toDocumentRow(r: DbDocument): DocumentRow {
+    const ex = (r.ai_extractions ?? [])[0];
+    return {
+      id: r.id,
+      fileName: r.file_name,
+      mimeType: r.mime_type,
+      byteSize: Number(r.byte_size),
+      status: r.status,
+      captureSource: r.capture_source,
+      createdAt: r.created_at,
+      model: ex?.model ?? null,
+      extraction: ex ? (ex.raw_output as Extraction) : null,
+    };
+  }
+
+  async ingestDocument(upload: DocumentUpload): Promise<IngestResult> {
+    const { bytes: byteSize } = assertUpload(upload);
+    const mimeType = mediaTypeFor(upload.contentType);
+    const bytes = Buffer.from(upload.dataBase64, "base64");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+
+    // Dedupe: the same file re-uploaded returns its existing extraction — no
+    // second (billable) call to Claude.
+    const existing = (await this.#request(
+      `/rest/v1/documents?organization_id=eq.${this.org}&sha256=eq.${sha256}` +
+        `&select=id,file_name,mime_type,byte_size,status,capture_source,created_at,` +
+        `ai_extractions(model,raw_output)&order=created_at.desc&limit=1`,
+    )) as DbDocument[];
+    if (existing[0]) {
+      const doc = this.#toDocumentRow(existing[0]);
+      return {
+        documentId: doc.id,
+        fileName: doc.fileName,
+        mimeType: doc.mimeType,
+        byteSize: doc.byteSize,
+        status: doc.status,
+        model: doc.model,
+        duplicate: true,
+        extraction: doc.extraction,
+        error: doc.extraction ? null : "Previously uploaded; no extraction on file",
+      };
+    }
+
+    const storagePath = `${this.org}/${sha256}`;
+    await this.#uploadObject(storagePath, bytes, mimeType);
+
+    const inserted = (await this.#request("/rest/v1/documents", {
+      method: "POST",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        organization_id: this.org,
+        storage_path: storagePath,
+        file_name: upload.filename,
+        mime_type: mimeType,
+        byte_size: byteSize,
+        sha256,
+        status: "UPLOADED",
+        capture_source: upload.captureSource ?? "MANUAL_UPLOAD",
+      }),
+    })) as { id: string }[];
+    const documentId = inserted[0]?.id;
+    if (!documentId) throw new StoreError("Document row was not created", 500);
+
+    const base: Omit<IngestResult, "status" | "extraction" | "error" | "model"> = {
+      documentId,
+      fileName: upload.filename,
+      mimeType,
+      byteSize,
+      duplicate: false,
+    };
+
+    // No provider configured: keep the file, skip extraction, tell the caller why.
+    if (!hasProvider(this.#provider)) {
+      return {
+        ...base,
+        status: "UPLOADED",
+        model: null,
+        extraction: null,
+        error: "AI extraction is not configured (set ANTHROPIC_API_KEY or GEMINI_API_KEY)",
+      };
+    }
+
+    try {
+      await this.#setDocumentStatus(documentId, "EXTRACTING");
+      const run = await runExtraction({
+        ...this.#provider,
+        base64: upload.dataBase64,
+        contentType: mimeType,
+        filename: upload.filename,
+      });
+      let extraction = run.extraction;
+      // Phase 3: auto-apply a learned categorization rule if one matches.
+      const hit = matchRule(extraction, await this.#activeRules());
+      if (hit) {
+        extraction = applyRuleToExtraction(extraction, hit.rule, hit.matchedOn);
+        await this.#bumpRuleApplied(hit.rule.id, hit.rule.timesApplied);
+      }
+      await this.#request("/rest/v1/ai_extractions", {
+        method: "POST",
+        body: JSON.stringify({
+          document_id: documentId,
+          organization_id: this.org,
+          model: run.model,
+          raw_output: extraction,
+          field_confidence: extraction.fieldConfidence,
+          validation_flags: extraction.validationFlags,
+        }),
+      });
+      await this.#setDocumentStatus(documentId, "EXTRACTED");
+      return { ...base, status: "EXTRACTED", model: run.model, extraction, error: null };
+    } catch (err) {
+      await this.#setDocumentStatus(documentId, "EXTRACTION_FAILED").catch(() => {});
+      return {
+        ...base,
+        status: "EXTRACTION_FAILED",
+        model: this.#anthropicModel || this.#geminiModel || null,
+        extraction: null,
+        error: err instanceof Error ? err.message : "Extraction failed",
+      };
+    }
+  }
+
+  async #setDocumentStatus(id: string, status: string): Promise<void> {
+    await this.#request(`/rest/v1/documents?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async listDocuments(): Promise<DocumentRow[]> {
+    const rows = (await this.#request(
+      `/rest/v1/documents?organization_id=eq.${this.org}` +
+        `&select=id,file_name,mime_type,byte_size,status,capture_source,created_at,` +
+        `ai_extractions(model,raw_output)&order=created_at.desc`,
+    )) as DbDocument[];
+    return rows.map((r) => this.#toDocumentRow(r));
+  }
+
+  async #activeRules(): Promise<CategorizationRule[]> {
+    const rows = (await this.#request(
+      `/rest/v1/categorization_rules?organization_id=eq.${this.org}&is_active=eq.true` +
+        `&select=id,match_vendor_tin,match_vendor_pattern,match_keyword,set_tax_category,` +
+        `set_accounting_category,note,priority,times_applied,source,is_active,created_at` +
+        `&order=priority.asc,created_at.asc`,
+    )) as DbRule[];
+    return rows.map(toRule);
+  }
+
+  async #bumpRuleApplied(id: string, current: number): Promise<void> {
+    await this.#request(`/rest/v1/categorization_rules?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ times_applied: current + 1, updated_at: new Date().toISOString() }),
+    }).catch(() => {});
+  }
+
+  async listRules(): Promise<CategorizationRule[]> {
+    return this.#activeRules();
+  }
+
+  async deleteRule(id: string): Promise<{ id: string }> {
+    await this.#request(`/rest/v1/categorization_rules?id=eq.${id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
+    });
+    return { id };
+  }
+
+  /** Insert a rule, or update the active one with the same matcher. */
+  async #upsertRule(input: unknown): Promise<CategorizationRule> {
+    const r = normalizeRuleInput(input);
+    const eq = (col: string, v: string | null) => (v == null ? `${col}=is.null` : `${col}=eq.${encodeURIComponent(v)}`);
+    const existing = (await this.#request(
+      `/rest/v1/categorization_rules?organization_id=eq.${this.org}&is_active=eq.true` +
+        `&${eq("match_vendor_tin", r.matchVendorTin)}&${eq("match_vendor_pattern", r.matchVendorPattern)}` +
+        `&${eq("match_keyword", r.matchKeyword)}&select=id&limit=1`,
+    )) as { id: string }[];
+    const body = {
+      set_tax_category: r.setTaxCategory,
+      set_accounting_category: r.setAccountingCategory,
+      note: r.note,
+      priority: r.priority,
+    };
+    if (existing[0]) {
+      const rows = (await this.#request(
+        `/rest/v1/categorization_rules?id=eq.${existing[0].id}&organization_id=eq.${this.org}`,
+        { method: "PATCH", headers: { prefer: "return=representation" },
+          body: JSON.stringify({ ...body, is_active: true, updated_at: new Date().toISOString() }) },
+      )) as DbRule[];
+      return toRule(rows[0] as DbRule);
+    }
+    const rows = (await this.#request("/rest/v1/categorization_rules", {
+      method: "POST",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({
+        organization_id: this.org,
+        match_vendor_tin: r.matchVendorTin,
+        match_vendor_pattern: r.matchVendorPattern,
+        match_keyword: r.matchKeyword,
+        source: "HUMAN_OVERRIDE",
+        ...body,
+      }),
+    })) as DbRule[];
+    const created = rows[0];
+    if (!created) throw new StoreError("Rule was not created", 500);
+    return toRule(created);
+  }
+
+  async overrideExtraction(documentId: string, override: OverrideInput): Promise<OverrideResult> {
+    // Load the document's latest extraction row.
+    const rows = (await this.#request(
+      `/rest/v1/ai_extractions?document_id=eq.${documentId}&organization_id=eq.${this.org}` +
+        `&select=id,raw_output&order=created_at.desc&limit=1`,
+    )) as { id: string; raw_output: Extraction }[];
+    const row = rows[0];
+    if (!row) throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+
+    const extraction = applyOverrideToExtraction(row.raw_output, override);
+    await this.#request(`/rest/v1/ai_extractions?id=eq.${row.id}&organization_id=eq.${this.org}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        raw_output: extraction,
+        field_confidence: extraction.fieldConfidence,
+        validation_flags: extraction.validationFlags,
+      }),
+    });
+
+    let rule: CategorizationRule | null = null;
+    if (override.createRule !== false) {
+      const input = buildRuleFromOverride(extraction, override);
+      if (input) rule = await this.#upsertRule(input);
+    }
+    return { documentId, extraction, rule };
+  }
+
+  async postDocumentToBank(
+    documentId: string,
+    bankAccountId: string | null = null,
+  ): Promise<PostToBankResult> {
+    const rows = (await this.#request(
+      `/rest/v1/ai_extractions?document_id=eq.${documentId}&organization_id=eq.${this.org}` +
+        `&select=raw_output&order=created_at.desc&limit=1`,
+    )) as { raw_output: Extraction }[];
+    const extraction = rows[0]?.raw_output;
+    if (!extraction) throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    if (!isBankDocument(extraction)) {
+      throw new StoreError("This document isn't a bank or cash movement", 422);
+    }
+    const line = bankLineFromExtraction(extraction);
+    if (!line) throw new StoreError("The document has no amount to post to Banking", 422);
+
+    const accounts = await this.listBankAccounts();
+    const target =
+      accounts.find((a) => a.id === bankAccountId) ??
+      accounts.find((a) => a.currency === extraction.currency) ??
+      accounts[0];
+    if (!target) throw new StoreError("No bank account to post into", 422);
+
+    const res = await this.importStatement(target.id, "PDF_UPLOAD", [line]);
+    return {
+      documentId,
+      bankAccountId: target.id,
+      bankAccountName: target.name,
+      imported: res.imported,
+      duplicates: res.duplicates,
+    };
+  }
+
+  async mvrPerUsd(): Promise<number> {
+    try {
+      const rows = (await this.#request(
+        `/rest/v1/exchange_rates?from_currency=eq.USD&to_currency=eq.MVR` +
+          `&select=rate&order=rate_date.desc&limit=1`,
+      )) as { rate: string | number }[];
+      const r = Number(rows[0]?.rate);
+      return Number.isFinite(r) && r > 0 ? r : 15.42;
+    } catch {
+      return 15.42; // MMA reference peg fallback
+    }
   }
 
   async verifyMember(token: string): Promise<boolean> {

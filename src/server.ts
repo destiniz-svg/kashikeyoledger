@@ -11,6 +11,7 @@ import { extname, join, normalize, sep } from "node:path";
 import { authorizeRead, authorizeWrite, extractApiKey } from "./auth.ts";
 import { createStore } from "./createStore.ts";
 import { StoreError, formatBillDate, type EntryInput, type SaleInput } from "./store.ts";
+import { buildCompliance } from "./compliance.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = "0.0.0.0";
@@ -93,12 +94,17 @@ const TAX_LABEL: Record<string, string> = {
   OUT_OF_SCOPE: "Out of scope",
 };
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+/** Default JSON body cap (1 MB); document uploads pass a larger limit. */
+const MAX_BODY = 1_000_000;
+/** Upload bodies carry base64 file data, so allow ~15 MB (≈10 MB file). */
+const MAX_UPLOAD_BODY = 15_000_000;
+
+async function readJson(req: IncomingMessage, maxBytes = MAX_BODY): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1_000_000) throw new Error("Request body too large");
+    if (size > maxBytes) throw new StoreError("Request body too large", 413);
     chunks.push(chunk as Buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -211,7 +217,14 @@ const server = createServer(async (req, res) => {
           "GET /banking  [read]",
           "GET /tax-filing  [read]",
           "GET /reports  [read]",
+          "GET /compliance  [read]",
           "GET /transactions  [read]",
+          "GET /documents  [read]",
+          "POST /documents { filename, contentType, dataBase64, captureSource? }  [write]",
+          "POST /documents/:id/override { taxCategory?, accountingCategory?, vendorTin?, createRule?, ruleScope? }  [write]",
+          "POST /documents/:id/post-to-bank { bankAccountId? }  [write]",
+          "GET /rules  [read]",
+          "DELETE /rules/:id  [write]",
           "GET /settings  [read]",
           "PATCH /settings { name?, tin?, sector?, timezone?, gstRegistered?, ... }  [write]",
           "POST /bills/:id/approve  [write]",
@@ -462,6 +475,81 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    if (method === "GET" && path === "/documents") {
+      if (!(await readGuard(req, res))) return;
+      const documents = await store.listDocuments();
+      const flagged = documents.filter(
+        (d) => (d.extraction?.validationFlags?.length ?? 0) > 0,
+      ).length;
+      return send(res, 200, {
+        documents,
+        summary: {
+          total: documents.length,
+          extracted: documents.filter((d) => d.status === "EXTRACTED").length,
+          failed: documents.filter((d) => d.status === "EXTRACTION_FAILED").length,
+          needsReview: flagged,
+        },
+      });
+    }
+
+    if (method === "POST" && path === "/documents") {
+      const body = (await readJson(req, MAX_UPLOAD_BODY)) as {
+        filename?: string;
+        contentType?: string;
+        dataBase64?: string;
+        captureSource?: string;
+      };
+      if (!body.filename || !body.contentType || !body.dataBase64) {
+        return send(res, 400, { error: "filename, contentType and dataBase64 are required" });
+      }
+      const result = await store.ingestDocument({
+        filename: body.filename,
+        contentType: body.contentType,
+        dataBase64: body.dataBase64,
+        captureSource: body.captureSource,
+      });
+      return send(res, 201, result);
+    }
+
+    const overrideMatch = /^\/documents\/([^/]+)\/override$/.exec(path);
+    if (method === "POST" && overrideMatch) {
+      const [, docId] = overrideMatch;
+      const body = (await readJson(req)) as {
+        taxCategory?: string;
+        accountingCategory?: string;
+        vendorTin?: string;
+        createRule?: boolean;
+        ruleScope?: "vendor" | "keyword";
+      };
+      const result = await store.overrideExtraction(docId, {
+        taxCategory: body.taxCategory,
+        accountingCategory: body.accountingCategory,
+        vendorTin: body.vendorTin,
+        createRule: body.createRule,
+        ruleScope: body.ruleScope,
+      });
+      return send(res, 200, result);
+    }
+
+    const postBankMatch = /^\/documents\/([^/]+)\/post-to-bank$/.exec(path);
+    if (method === "POST" && postBankMatch) {
+      const [, docId] = postBankMatch;
+      const body = (await readJson(req)) as { bankAccountId?: string };
+      const result = await store.postDocumentToBank(docId, body.bankAccountId ?? null);
+      return send(res, 201, result);
+    }
+
+    if (method === "GET" && path === "/rules") {
+      if (!(await readGuard(req, res))) return;
+      return send(res, 200, { rules: await store.listRules() });
+    }
+
+    const ruleMatch = /^\/rules\/([^/]+)$/.exec(path);
+    if (method === "DELETE" && ruleMatch) {
+      const [, ruleId] = ruleMatch;
+      return send(res, 200, await store.deleteRule(ruleId));
+    }
+
     if ((method === "PATCH" || method === "PUT") && path === "/settings") {
       const body = (await readJson(req)) as Record<string, unknown>;
       const settings = await store.updateOrgSettings(body);
@@ -512,6 +600,42 @@ const server = createServer(async (req, res) => {
         },
         members,
       });
+    }
+
+    if (method === "GET" && path === "/compliance") {
+      if (!(await readGuard(req, res))) return;
+      const [tb, bills, vendors, documents, ggst, tgst, bankTxns, mvrPerUsd, oob] =
+        await Promise.all([
+          store.trialBalance(),
+          store.listBills(),
+          store.listVendors(),
+          store.listDocuments(),
+          store.listGstFilings(),
+          store.listTgstFilings(),
+          store.listBankTransactions(),
+          store.mvrPerUsd(),
+          store.outOfBalanceBy(),
+        ]);
+      const sumBy = (types: string[]) =>
+        tb.filter((r) => types.includes(r.accountType)).reduce((s, r) => s + r.balance, 0);
+      const report = buildCompliance({
+        bills,
+        vendors,
+        documents,
+        ggstFilings: ggst,
+        tgstFilings: tgst,
+        unreconciledBankLines: bankTxns.filter((t) =>
+          ["UNMATCHED", "SUGGESTED"].includes(t.reconStatus)).length,
+        outOfBalanceBy: oob,
+        cashAndBank: sumBy(["ASSET", "BANK"]),
+        expenses: sumBy(["EXPENSE", "COGS"]),
+        accountsPayable: -sumBy(["LIABILITY"]),
+        claimableInputTax: round2(
+          bills.filter((b) => b.taxCat !== "EXEMPT").reduce((s, b) => s + b.gst, 0),
+        ),
+        mvrPerUsd,
+      });
+      return send(res, 200, report);
     }
 
     if (method === "GET" && path === "/tax-filing") {

@@ -8,6 +8,7 @@ import {
   STATEMENT_SOURCES,
   agingBucket,
   assertReconStatus,
+  assertUpload,
   bankTxnSigned,
   computeSale,
   formatBillDate,
@@ -21,11 +22,16 @@ import {
   type BankAccountRow,
   type BankTxnRow,
   type BillRow,
+  type DocumentRow,
+  type DocumentUpload,
+  type IngestResult,
   type ImportLineInput,
   type ImportResult,
   type MemberRow,
   type OrgSettings,
   type OrgSettingsPatch,
+  type OverrideResult,
+  type PostToBankResult,
   type EntryInput,
   type EntryRow,
   type LedgerStore,
@@ -38,6 +44,91 @@ import {
   type TrialBalanceRow,
   type VendorRow,
 } from "./store.ts";
+import {
+  DEFAULT_EXTRACTION_MODEL,
+  bankLineFromExtraction,
+  deriveValidationFlags,
+  isBankDocument,
+  mediaTypeFor,
+  normalizeExtraction,
+  type Extraction,
+} from "./aiExtract.ts";
+import {
+  applyOverrideToExtraction,
+  applyRuleToExtraction,
+  buildRuleFromOverride,
+  matchRule,
+  normalizeRuleInput,
+  ruleLabel,
+  type CategorizationRule,
+  type OverrideInput,
+} from "./rules.ts";
+
+/**
+ * A canned extraction so the AI ingestion flow works end-to-end on the in-memory
+ * backend (no Supabase, no Anthropic key). Returns a bank deposit slip when the
+ * filename hints a banking document, else a typical hardware-supplier invoice;
+ * validation flags are derived the same way as live.
+ */
+function cannedExtraction(filename: string): Extraction {
+  if (/deposit|withdraw|bank|slip|transfer|voucher|remit/i.test(filename)) {
+    const b = normalizeExtraction({
+      document_type: "BANK_DEPOSIT",
+      direction: "IN",
+      bank_name: "Bank of Maldives",
+      bank_account_ref: "•••• 4021",
+      counterparty: "Altura Pvt Ltd",
+      reference: "DEP-26071401",
+      currency: "MVR",
+      document_date: "2026-07-14",
+      line_items: [],
+      grand_total: 51000,
+      predicted_tax_category: "OUT_OF_SCOPE",
+      confidence_score: 0.9,
+      ai_reasoning:
+        `Sample extraction for "${filename}". A Bank of Maldives cash deposit of ` +
+        "MVR 51,000. Cash movements are out of scope for GST — post it to Banking " +
+        "for reconciliation.",
+      field_confidence: { grand_total: 0.95, document_date: 0.9 },
+    });
+    b.validationFlags = deriveValidationFlags(b);
+    return b;
+  }
+  const e = normalizeExtraction({
+    document_type: "PURCHASE_INVOICE",
+    vendor_name: "Island Mark Hardware Pvt Ltd",
+    vendor_tin: null,
+    invoice_number: "IMH-4471",
+    document_date: "2026-05-11",
+    due_date: "2026-05-26",
+    currency: "MVR",
+    fx_rate_to_mvr: null,
+    line_items: [
+      {
+        description: "Assorted fixings & tools",
+        quantity: 12,
+        unit_price: 358.33,
+        amount: 4300,
+        tax_category: "GGST",
+        tax_rate_percent: 8,
+        accounting_category: "Hardware",
+      },
+    ],
+    subtotal: 4300,
+    tax_total: 344,
+    grand_total: 4644,
+    accounting_category: "Hardware",
+    predicted_tax_category: "GGST",
+    confidence_score: 0.82,
+    ai_reasoning:
+      `Sample extraction for "${filename}". General hardware supplies at the 8% ` +
+      "GGST rate (no tourism indicators). The vendor TIN is not printed, so an " +
+      "input-tax claim needs it confirmed.",
+    field_confidence: { vendor_name: 0.9, grand_total: 0.88, predicted_tax_category: 0.8 },
+  });
+  e.validationFlags = deriveValidationFlags(e);
+  return e;
+}
 
 /** Demo GGST (MIRA 205) filing calendar, mirroring the seeded Supabase org. */
 const F0 = { sales8: 0, salesZero: 0, salesExempt: 0, salesOos: 0 };
@@ -118,6 +209,8 @@ export class MemoryStore implements LedgerStore {
   readonly #sales: SaleRow[] = [];
   readonly #bills = DEMO_BILLS.map((b) => ({ ...b }));
   readonly #bankTxns = DEMO_BANK_TXNS.map((t) => ({ ...t }));
+  readonly #documents: DocumentRow[] = [];
+  readonly #rules: CategorizationRule[] = [];
 
   constructor(seed = true) {
     if (seed) {
@@ -404,6 +497,143 @@ export class MemoryStore implements LedgerStore {
       imported += 1;
     }
     return { importId: `import-${++this.#idSeq}`, imported, duplicates, total: clean.length };
+  }
+
+  async ingestDocument(upload: DocumentUpload): Promise<IngestResult> {
+    const { bytes } = assertUpload(upload);
+    const mimeType = mediaTypeFor(upload.contentType); // rejects unsupported types
+    let extraction = cannedExtraction(upload.filename);
+    // Phase 3: auto-apply a learned rule if one matches this document.
+    const hit = matchRule(extraction, this.#rules);
+    if (hit) {
+      extraction = applyRuleToExtraction(extraction, hit.rule, hit.matchedOn);
+      hit.rule.timesApplied += 1;
+    }
+    const doc: DocumentRow = {
+      id: `doc-${++this.#idSeq}`,
+      fileName: upload.filename,
+      mimeType,
+      byteSize: bytes,
+      status: "EXTRACTED",
+      captureSource: upload.captureSource ?? "MANUAL_UPLOAD",
+      createdAt: new Date().toISOString(),
+      model: `${DEFAULT_EXTRACTION_MODEL} (demo)`,
+      extraction,
+    };
+    this.#documents.unshift(doc);
+    return {
+      documentId: doc.id,
+      fileName: doc.fileName,
+      mimeType: doc.mimeType,
+      byteSize: doc.byteSize,
+      status: doc.status,
+      model: doc.model,
+      duplicate: false,
+      extraction,
+      error: null,
+    };
+  }
+
+  async listDocuments(): Promise<DocumentRow[]> {
+    return this.#documents.map((d) => ({ ...d }));
+  }
+
+  async overrideExtraction(documentId: string, override: OverrideInput): Promise<OverrideResult> {
+    const doc = this.#documents.find((d) => d.id === documentId);
+    if (!doc || !doc.extraction) {
+      throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    }
+    doc.extraction = applyOverrideToExtraction(doc.extraction, override);
+    let rule: CategorizationRule | null = null;
+    if (override.createRule !== false) {
+      const input = buildRuleFromOverride(doc.extraction, override);
+      if (input) rule = this.#upsertRule(input);
+    }
+    return { documentId, extraction: doc.extraction, rule };
+  }
+
+  #upsertRule(input: unknown): CategorizationRule {
+    const r = normalizeRuleInput(input);
+    // Replace an existing active rule with the same matcher, else create one.
+    const existing = this.#rules.find(
+      (x) =>
+        x.isActive !== false &&
+        x.matchVendorTin === r.matchVendorTin &&
+        x.matchVendorPattern === r.matchVendorPattern &&
+        x.matchKeyword === r.matchKeyword,
+    );
+    if (existing) {
+      existing.setTaxCategory = r.setTaxCategory;
+      existing.setAccountingCategory = r.setAccountingCategory;
+      existing.note = r.note;
+      existing.priority = r.priority;
+      return existing;
+    }
+    const rule: CategorizationRule = {
+      id: `rule-${++this.#idSeq}`,
+      matchVendorTin: r.matchVendorTin,
+      matchVendorPattern: r.matchVendorPattern,
+      matchKeyword: r.matchKeyword,
+      setTaxCategory: r.setTaxCategory,
+      setAccountingCategory: r.setAccountingCategory,
+      note: r.note,
+      priority: r.priority,
+      timesApplied: 0,
+      source: "HUMAN_OVERRIDE",
+      isActive: true,
+      createdAt: new Date().toISOString(),
+    };
+    this.#rules.push(rule);
+    return rule;
+  }
+
+  async listRules(): Promise<CategorizationRule[]> {
+    return this.#rules
+      .filter((r) => r.isActive !== false)
+      .sort((a, b) => a.priority - b.priority || String(a.createdAt).localeCompare(String(b.createdAt)))
+      .map((r) => ({ ...r, label: ruleLabel(r) }));
+  }
+
+  async deleteRule(id: string): Promise<{ id: string }> {
+    const rule = this.#rules.find((r) => r.id === id);
+    if (!rule) throw new StoreError(`Rule "${id}" not found`, 404);
+    rule.isActive = false;
+    return { id };
+  }
+
+  async postDocumentToBank(
+    documentId: string,
+    bankAccountId: string | null = null,
+  ): Promise<PostToBankResult> {
+    const doc = this.#documents.find((d) => d.id === documentId);
+    if (!doc || !doc.extraction) {
+      throw new StoreError(`No extraction found for document "${documentId}"`, 404);
+    }
+    if (!isBankDocument(doc.extraction)) {
+      throw new StoreError("This document isn't a bank or cash movement", 422);
+    }
+    const line = bankLineFromExtraction(doc.extraction);
+    if (!line) throw new StoreError("The document has no amount to post to Banking", 422);
+
+    const accounts = await this.listBankAccounts();
+    const target =
+      accounts.find((a) => a.id === bankAccountId) ??
+      accounts.find((a) => a.currency === doc.extraction!.currency) ??
+      accounts[0];
+    if (!target) throw new StoreError("No bank account to post into", 422);
+
+    const res = await this.importStatement(target.id, "PDF_UPLOAD", [line]);
+    return {
+      documentId,
+      bankAccountId: target.id,
+      bankAccountName: target.name,
+      imported: res.imported,
+      duplicates: res.duplicates,
+    };
+  }
+
+  async mvrPerUsd(): Promise<number> {
+    return 15.42; // MMA reference peg
   }
 
   async listVendors(): Promise<VendorRow[]> {

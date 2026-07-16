@@ -50,10 +50,20 @@ export const getBills = () => get("/bills");
 export const getVendors = () => get("/vendors");
 export const getTaxFiling = () => get("/tax-filing");
 export const getReports = () => get("/reports");
+export const getCompliance = () => get("/compliance");
 export const getInventory = () => get("/inventory");
 export const getBanking = () => get("/banking");
 export const getSettings = () => get("/settings");
 export const getTransactions = () => get("/transactions");
+export const getDocuments = () => get("/documents");
+export const uploadDocument = (filename, contentType, dataBase64, captureSource) =>
+  post("/documents", { filename, contentType, dataBase64, captureSource });
+export const overrideDocument = (id, override) =>
+  post(`/documents/${encodeURIComponent(id)}/override`, override);
+export const postDocumentToBank = (id, bankAccountId) =>
+  post(`/documents/${encodeURIComponent(id)}/post-to-bank`, bankAccountId ? { bankAccountId } : undefined);
+export const getRules = () => get("/rules");
+export const deleteRule = (id) => del(`/rules/${encodeURIComponent(id)}`);
 
 async function patch(path, body) {
   const token = getToken();
@@ -63,6 +73,13 @@ async function patch(path, body) {
       ? { "x-api-key": KEY, "content-type": "application/json" }
       : { "content-type": "application/json" };
   const res = await fetch(`${BASE}${path}`, { method: "PATCH", headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+async function del(path) {
+  const token = getToken();
+  const headers = token ? { authorization: `Bearer ${token}` } : KEY ? { "x-api-key": KEY } : {};
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE", headers });
   if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json();
 }

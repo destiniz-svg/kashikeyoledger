@@ -8,7 +8,7 @@ import { Eyebrow } from "./ui.jsx";
 
 const FEATURES = [
   [Sparkles, "AI bill approval",
-    "Claude reads each invoice — vendor, TIN, line items, tax — and flags mismatches before you approve."],
+    "AI reads each invoice — vendor, TIN, line items, tax — and flags mismatches before you approve."],
   [Landmark, "Bank reconciliation",
     "Import BML statements and auto-match lines to payments: exact, fuzzy, then rules. Bulk-confirm in one pass."],
   [CalendarClock, "MIRA 205 & 206 filing",

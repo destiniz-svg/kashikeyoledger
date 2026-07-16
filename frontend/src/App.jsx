@@ -18,6 +18,7 @@ const TaxFiling = named(() => import("./TaxFiling.jsx"), "TaxFiling");
 const Reports = named(() => import("./Reports.jsx"), "Reports");
 const Inventory = named(() => import("./Inventory.jsx"), "Inventory");
 const Banking = named(() => import("./Banking.jsx"), "Banking");
+const AIInbox = named(() => import("./AIInbox.jsx"), "AIInbox");
 const Transactions = named(() => import("./Transactions.jsx"), "Transactions");
 const Settings = named(() => import("./Settings.jsx"), "Settings");
 const Placeholder = named(() => import("./Placeholder.jsx"), "Placeholder");
@@ -82,7 +83,7 @@ class ScreenBoundary extends React.Component {
 const TITLES = {
   dashboard: "Spend Overview", approval: "Approval queue", bills: "Bills & expenses",
   inventory: "Inventory", banking: "Banking", filing: "Tax filing", vendors: "Vendors",
-  reports: "Reports", txns: "All transactions", settings: "Settings",
+  reports: "Reports", txns: "All transactions", settings: "Settings", inbox: "AI Inbox",
 };
 export default function App() {
   const [active, setActive] = useState("dashboard");
@@ -147,9 +148,10 @@ export default function App() {
             {active === "reports" && <Reports />}
             {active === "inventory" && <Inventory />}
             {active === "banking" && <Banking session={session} onRequireLogin={() => setLoginOpen(true)} />}
+            {active === "inbox" && <AIInbox session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "settings" && <Settings session={session} onRequireLogin={() => setLoginOpen(true)} />}
             {active === "txns" && <Transactions />}
-            {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "settings", "txns"].includes(active) && <Placeholder id={active} />}
+            {!isCore && !["vendors", "filing", "reports", "inventory", "banking", "inbox", "settings", "txns"].includes(active) && <Placeholder id={active} />}
           </Suspense>
           </ScreenBoundary>
         </div>
